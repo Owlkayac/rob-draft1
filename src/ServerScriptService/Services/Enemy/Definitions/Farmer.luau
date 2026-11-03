@@ -9,6 +9,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Types = require(script.Parent.Parent.Types)
 local Patrol = require(script.Parent.Parent.Behaviors.Patrol)
+local Notice = require(script.Parent.Parent.Behaviors.Notice)
 local Chase = require(script.Parent.Parent.Behaviors.Chase)
 local Search = require(script.Parent.Parent.Behaviors.Search)
 
@@ -37,8 +38,43 @@ local baseStats: Types.StatTable = {
 	WalkSpeed = Config.FarmerWalkSpeed * speed,
 	ChaseSpeed = Config.FarmerChaseSpeed * speed,
 	SightDistance = Config.FarmerSightDistance, -- 倍率をかけない
-	LoseSightSeconds = Config.FarmerLoseSightSeconds,
-	SearchSeconds = Config.FarmerSearchSeconds,
+	-- 見失う・探す時間(最小〜最大のあいだでランダム。仕様書 014)
+	LoseSightSecondsMin = Config.FarmerLoseSightSecondsMin,
+	LoseSightSecondsMax = Config.FarmerLoseSightSecondsMax,
+	SearchSecondsMin = Config.FarmerSearchSecondsMin,
+	SearchSecondsMax = Config.FarmerSearchSecondsMax,
+	SearchRoamRadius = Config.FarmerSearchRoamRadius,
+	SearchRoamSpotsMin = Config.FarmerSearchRoamSpotsMin,
+	SearchRoamSpotsMax = Config.FarmerSearchRoamSpotsMax,
+	-- 見回りのランダム性
+	RoamPointChance = Config.FarmerRoamPointChance,
+	RoamWallMargin = Config.FarmerRoamWallMargin,
+	PauseChance = Config.FarmerPauseChance,
+	PauseSecondsMin = Config.FarmerPauseSecondsMin,
+	PauseSecondsMax = Config.FarmerPauseSecondsMax,
+	WalkSpeedJitter = Config.FarmerWalkSpeedJitter,
+	PatrolTargetTimeoutSeconds = Config.FarmerPatrolTargetTimeoutSeconds,
+	LookAroundMaxRad = math.rad(Config.FarmerLookAroundMaxDeg),
+	PauseTurnRadPerSecond = math.rad(Config.FarmerPauseTurnDegPerSecond),
+	HunchIntervalMin = Config.FarmerHunchIntervalMin,
+	HunchIntervalMax = Config.FarmerHunchIntervalMax,
+	HunchChance = Config.FarmerHunchChance,
+	HunchErrorRadius = Config.FarmerHunchErrorRadius,
+	-- 気づく・追跡のランダム性
+	NoticeSecondsMin = Config.FarmerNoticeSecondsMin,
+	NoticeSecondsMax = Config.FarmerNoticeSecondsMax,
+	NoticeTurnRadPerSecond = math.rad(Config.FarmerNoticeTurnDegPerSecond),
+	BurstIntervalMin = Config.FarmerBurstIntervalMin,
+	BurstIntervalMax = Config.FarmerBurstIntervalMax,
+	BurstSeconds = Config.FarmerBurstSeconds,
+	BurstMultiplier = Config.FarmerBurstMultiplier,
+	StumbleIntervalMin = Config.FarmerStumbleIntervalMin,
+	StumbleIntervalMax = Config.FarmerStumbleIntervalMax,
+	StumbleSeconds = Config.FarmerStumbleSeconds,
+	-- 追跡の速さの上限:ザリガニの歩く速さ × 比(公平さ。ダッシュしても超えない)
+	ChaseSpeedMax = Config.CrayfishWalkSpeed * Config.FarmerChaseMaxSpeedRatio,
+	-- 出現直後に、プレイヤーを見つけない時間
+	StartGraceSeconds = Config.FarmerStartGraceSeconds,
 }
 applyScale(baseStats, Config.FarmerScale) -- 最初は設定の倍率。モデルを作るたびに、実際の倍率で入れ直す
 
@@ -58,10 +94,12 @@ local Farmer: Types.Definition = {
 	BaseStats = baseStats,
 	Behaviors = {
 		Patrol = Patrol,
+		Notice = Notice, -- 見つけたあと、すぐには走らず、立ち止まって相手のほうを向く(仕様書 014)
 		Chase = Chase,
 		Search = Search,
 	},
 	InitialBehavior = "Patrol",
+	OnBehaviorChanged = FarmerModel.SetState, -- 行動が変わるたびに、EnemyState と頭の上の「!」「?」を切り替える
 }
 
 return Farmer

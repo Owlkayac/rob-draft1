@@ -29,13 +29,15 @@ EnemyService  ...全体の進行役(天敵を出す / ループを回す / や�
 Enemy/
   Types.luau        型(データの形の約束)
   Stats.luau        数字の計算: 基本の数字 x 補正の積
+  EnemyRandom.luau  ランダムの道具(乱数を作る・秒数/確率/ゆらぎ・ランダムな場所)
   WarnOnce.luau     同じ警告を1回だけ出す小さな部品
   Perception.luau   見る・捕まえる
   Movement.luau     歩く(経路探索)
   Behaviors/
-    Patrol.luau     見回り
-    Chase.luau      追跡
-    Search.luau     探す
+    Patrol.luau     見回り(ランダムな行き先・立ち止まり・勘)
+    Notice.luau     気づく(見つけたあと、立ち止まって相手を向く)
+    Chase.luau      追跡(ダッシュ・つまずき・速さの上限)
+    Search.luau     探す(最後に見えた位置の近くを歩く)
     Sweep.luau      刈り取り(稲刈り機の動き)
   SweepRoute.luau   稲刈り機の通る道すじの計算
   Definitions/
@@ -46,7 +48,7 @@ Enemy/
 読み込みの向きは、いつも一方向です(ぐるっと回って読み込む「循環 require」を作らない)。
 
 ```
-Types / WarnOnce -> Stats -> Perception -> Movement -> Behaviors -> Definitions -> EnemyService
+Types / WarnOnce -> Stats -> EnemyRandom -> Perception -> Movement -> Behaviors -> Definitions -> EnemyService
 Config -> SweepRoute -> Sweep(Behaviors)、Harvester(Definitions)   ※ SweepRoute は Config だけを読む
 ```
 
@@ -60,6 +62,7 @@ Config -> SweepRoute -> Sweep(Behaviors)、Harvester(Definitions)   ※ SweepRou
 | `Enemy/Stats.luau` | `Stats.Get(定義, "数字の名前", 相手)` で、いまの数字を返す。`Stats.RegisterModifier(名前, 関数)` で補正を足す。最初から "RiceGrowth"(稲の成長で発見距離が縮む)が登録されている。 |
 | `Enemy/Perception.luau` | 見える・見えないの判定、いちばん近い相手、捕まえる判定。距離は横方向(XZ)だけで測る。 |
 | `Enemy/Movement.luau` | 目的地へ歩く。経路を作り直す、作れなければ直接向かう、古い計算結果を捨てる(世代番号)。 |
+| `Enemy/EnemyRandom.luau` | ランダムの道具。`EnemyRandom.New()` で天敵ごとの乱数を作る。`Seconds`(最小〜最大の秒数。0.001 秒より小さくならない)、`Chance`(確率)、`Jitter`(±のゆらぎの倍率)、`PointInField`・`PointNear`(田んぼの中のランダムな場所)。数字は `Stats.Get` で取る。 |
 | `Enemy/Behaviors/*.luau` | 行動1つにつき1ファイル。`Enter`(切り替わった時に1回)、`Update`(毎回。次の行動の名前か nil を返す)、`Exit`(やめる時に1回)。 |
 | `Enemy/Definitions/*.luau` | 天敵の種類1つにつき1ファイル。名前、見た目の作り方、足元の高さの補正、基本の数字、使う行動、最初の行動。 |
 | `ServerStorage/Modules/FarmerModel.luau` | 農家さんの見た目(モデル)を作る。大きさ(`FarmerScale`)もここで反映し、実際に使った倍率を返す。足元の高さの測り方(`GetFootY`)と置き方(`PlaceAt`)もここ。 |
@@ -99,7 +102,7 @@ local definitions: { Types.Definition } = {
    ファイルを別のフォルダに移したら、`script.Parent` の数を数え直すこと。
 5. Studio で確認する。出現位置は、見回り地点を順にずらして決まる。
 
-数字の名前(`BaseStats` に書くもの): `WalkSpeed`、`ChaseSpeed`、`SightDistance`、`CatchDistance`、`CatchHiddenDistance`、`PatrolArriveDistance`、`WaypointReachDistance`、`AgentRadius`、`AgentHeight`、`LoseSightSeconds`、`SearchSeconds`、`Speed`(稲刈り機の進む速さ)。
+数字の名前(`BaseStats` に書くもの): `WalkSpeed`、`ChaseSpeed`、`SightDistance`、`CatchDistance`、`CatchHiddenDistance`、`PatrolArriveDistance`、`WaypointReachDistance`、`AgentRadius`、`AgentHeight`、`LoseSightSecondsMin` / `Max`、`SearchSecondsMin` / `Max`(最小〜最大のあいだでランダム)、`Speed`(稲刈り機の進む速さ)。仕様書 014 のランダム性の数字(`PauseChance`、`BurstSeconds` など)の一覧は `Enemy/Types.luau` の先頭にある。
 
 注意: 仕様書 002 の 6 に「天敵の複数種類は後で追加する」とあるので、サギを実際に足す前に、仕様書を書くこと。
 
@@ -173,7 +176,7 @@ end)
 - 補正の関数に渡る `info.Definition` は天敵の種類、`info.Player` は狙う相手(いない場合は nil)。種類や相手で、倍率を変えられる。
 - 同じ名前で登録し直すと、置き換わる。`Stats.UnregisterModifier(名前)` で外せる。
 - 補正の中でエラーが起きても、その補正は 1 倍として扱われる(ゲームは止まらない)。返り値が table でない、倍率が数字でない・0以下・NaN(数字でない値)・無限大のときも、1 倍として扱う。警告(補正の名前と理由)は、同じ内容なら 1 回だけ出る(`WarnOnce`)。
-- 農家さんの速さは、行動に「切り替わった時」に読まれる(`Enter`)。稲刈り機の `Speed` は、`Sweep` が毎フレーム読むので、すぐ反映される。追跡の途中で季節が変わっても、次に切り替わるまで速さは変わらない。毎回読みたいときは、行動の `Update` で `Humanoid.WalkSpeed` を設定し直す。
+- 農家さんの速さは、見回りでは「1回の移動を始める時」、追跡では「毎回の判断(0.2秒ごと)」、探すでは「切り替わった時」(`Enter`)に読まれる。稲刈り機の `Speed` は、`Sweep` が毎フレーム読むので、すぐ反映される。見回りと探すの途中で季節が変わっても、次の移動・次に切り替わるまで速さは変わらない(追跡は毎回読むので、すぐ変わる)。
 - 発見距離と捕まえる距離は、毎回の判断で読まれるので、すぐ反映される。
 
 ## 6. Config の数字の意味と、調整のしかた
@@ -235,3 +238,31 @@ end
 2. 定義(`Definitions/Harvester.luau`)に、必要な任意の関数を書く。
 3. `EnemyService` の `definitions` に足す(農家さんの次)。
 
+
+## 8. ランダム性と、新しい行動 Notice(仕様書 014)
+
+くわしい使い方と、数字の調整表は `docs/design/enemy-behavior-random.md`。ここでは、設計の足し方だけ。
+
+### ランダムの持ち方(コンテキストの `Random`)
+- 天敵1体ごとに、`ctx.Random`(Roblox の `Random`)を1つ持つ。`EnemyService` が天敵を作るとき、`EnemyRandom.New()` で作る。
+- 行動は、`math.random` を使わず、必ず `ctx.Random` を使う(天敵ごとに独立し、固定もできる)。
+- 秒数・確率・ゆらぎは、`EnemyRandom.Seconds` / `Chance` / `Jitter` を使うと、`Stats.Get`(補正が効く)と、0 秒の安全対策がつく。
+- 行動ごとの記憶(立ち止まっている時刻など)は、行動のファイルの中の表(`states[ctx]`)に持つ。`Enter` で作り、`Exit` で消す(`Sweep.luau` と同じ)。
+
+### 乱数の固定(`EnemyRandom` の `Config.EnemyRandomSeed`)
+- `Config.EnemyRandomSeed` が 0 以外なら、`Random.new(その数字)` で作る。同じ数字なら、同じ順番でランダムが出る(動きを再現して、直すときに使う)。0 なら `Random.new()`(毎回ちがう)。
+- ただし、プレイヤーの動きや時間の揺れで、結果が少し変わることはある(完全な再現ではない)。
+
+### 新しい行動(Notice)の足し方
+`Notice` は、仕様書 014 で足した行動で、新しい行動の例になっている(`Enemy/Behaviors/Notice.luau`)。
+1. 行動のファイルを作る。`Enter` で記憶を作る(`states[ctx] = ...`)、`Update` で次の行動の名前を返す、`Exit` で記憶を消す。
+2. 定義の `Behaviors` に足す(農家さん: `Notice = Notice`)。
+3. 切り替え元の行動から、`return "Notice"` する。**その行動を持たない天敵は、これまでどおりの動き**になるように、`ctx.Definition.Behaviors["Notice"] ~= nil` を見てから返す(`Patrol` と `Search` がそうしている。持たなければ `Chase`)。
+4. 数字は `BaseStats` に足し、`Config` に置く。
+
+### 行動の変化を知らせる(`OnBehaviorChanged`)
+- 定義が `OnBehaviorChanged(model, behaviorName)` を持っていれば、`EnemyService` の `switchBehavior` が、行動が切り替わるたびに呼ぶ(`pcall` で包んであるので、モデルが壊れていてもゲームは止まらない)。
+- 農家さんは `FarmerModel.SetState` を登録している。モデルに Attribute `EnemyState`(`Patrol` / `Notice` / `Chase` / `Search`)をつけ、頭の上の「!」「?」(BillboardGui `StateSign`)を切り替える。稲刈り機は登録しない(`EnemyState` を持たない)ので、クライアントは `EnemyState` の有無で農家さんを見分けられる。
+
+### 出現直後の猶予
+- `BaseStats.StartGraceSeconds` を持つ天敵は、出現(作られたとき・「もう一度」)から、その秒数のあいだ、見回り・探すでプレイヤーを見つけない(`Perception.Scan` が `ctx.GraceUntil` を見る)。追跡・気づく中は影響しない。

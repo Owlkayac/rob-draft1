@@ -40,6 +40,51 @@ function Movement.Stop(ctx: Types.Context)
 	end
 end
 
+-- ===== 向きを変える(仕様書 014。立ち止まったまま、相手のほうを向く・きょろきょろする) =====
+-- 向き(yaw)は、真上から見て、どちらを向いているかの角度(ラジアン)。
+-- CFrame.Angles(0, yaw, 0) の正面(-Z)は、(-sin yaw, 0, -cos yaw) の向き。逆算すると yaw = atan2(-x, -z)。
+
+-- 向きの角度の計算に使う、ごく小さい数(これより短いベクトルは「向きなし」とみなす)
+local TINY = 1e-3
+
+-- direction の向き(横方向だけ)を、yaw に直す。ほぼ真上・真下で、向きが決まらないときは nil
+function Movement.YawOfDirection(direction: Vector3): number?
+	local x = direction.X
+	local z = direction.Z
+	if math.sqrt(x * x + z * z) < TINY then
+		return nil
+	end
+	return math.atan2(-x, -z)
+end
+
+-- いまの向き(yaw)
+function Movement.GetYaw(ctx: Types.Context): number
+	local look = ctx.Root.CFrame.LookVector
+	return Movement.YawOfDirection(look) or 0
+end
+
+-- yaw の差を -pi 〜 pi にそろえる(いちばん近い回り方にするため)
+local function wrapAngle(angle: number): number
+	return (angle + math.pi) % (2 * math.pi) - math.pi
+end
+
+-- いまの向きから、targetYaw に向かって、最大 maxStep(ラジアン)だけ回す。位置は変えない。
+-- 立ち止まっているとき(Humanoid が自分では向きを変えないとき)に使う。
+-- Humanoid を使う天敵の Root(HumanoidRootPart)の CFrame を、向きだけ変えて入れ直す
+function Movement.TurnToYaw(ctx: Types.Context, targetYaw: number, maxStep: number)
+	local root = ctx.Root
+	if root.Parent == nil then
+		return
+	end
+	local current = Movement.GetYaw(ctx)
+	local limit = math.max(maxStep, 0)
+	local step = math.clamp(wrapAngle(targetYaw - current), -limit, limit)
+	if math.abs(step) < TINY then
+		return
+	end
+	root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, current + step, 0)
+end
+
 -- 経路を作り直す。待っている間に世代が変わったり壊れたりして、結果を捨てたら false
 local function refreshRoute(ctx: Types.Context, destination: Vector3): boolean
 	local move = ctx.Move

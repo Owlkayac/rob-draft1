@@ -59,8 +59,35 @@ local function getPlayingRoot(player: Player): BasePart?
 	return root
 end
 
+-- 出現直後の猶予の間か(仕様書 014 の 1-5)。見回り・探すのときだけ、プレイヤーを見つけない。
+-- 追跡・気づくの最中は、猶予で見失わせない
+local function isInGrace(ctx: Types.Context): boolean
+	if os.clock() >= ctx.GraceUntil then
+		return false
+	end
+	return ctx.BehaviorName ~= "Chase" and ctx.BehaviorName ~= "Notice"
+end
+
+-- いちばん近い「遊んでいるプレイヤー」の位置(潜っていても、見えなくても数える)。いなければ nil。
+-- 農家さんの「勘」(だいたいの場所へ向かう)に使う。発見の判定ではない
+function Perception.FindNearestPlayingPosition(from: Vector3): Vector3?
+	local bestPosition: Vector3? = nil
+	local bestDistance = math.huge
+	for _, player in Players:GetPlayers() do
+		local root = getPlayingRoot(player)
+		if root then
+			local distance = flatDistance(from, root.Position)
+			if distance < bestDistance then
+				bestDistance = distance
+				bestPosition = root.Position
+			end
+		end
+	end
+	return bestPosition
+end
+
 -- 見回して、結果を ctx.Target(いちばん近い、見える相手)と ctx.AnyPlaying に入れる。
--- 見える条件: 発見距離以内にいて、かつ、潜っていない
+-- 見える条件: 発見距離以内にいて、かつ、潜っていない。出現直後の猶予の間は、見回り・探すでは見つけない
 function Perception.Scan(ctx: Types.Context)
 	local best: Types.Target? = nil
 	local anyPlaying = false
@@ -76,6 +103,9 @@ function Perception.Scan(ctx: Types.Context)
 				best = { Player = player, Position = root.Position, Distance = distance }
 			end
 		end
+	end
+	if isInGrace(ctx) then
+		best = nil -- 猶予の間は、見えていても見つけたことにしない
 	end
 	ctx.Target = best
 	ctx.AnyPlaying = anyPlaying

@@ -2,6 +2,7 @@
 -- 農家さんの「見た目」だけを作る部品。動きの判断は EnemyService が行う。(仕様書 002)
 -- 外部の素材は使わず、Roblox 標準の人型(R15)と、図形の麦わら帽子で作る。
 -- 大きさは Config.FarmerScale 倍(仕様書 002 の 8)。足元の高さの補正もここ(PlaceAt)。帽子の大きさの数字は「標準サイズ基準」。
+-- 仕様書 014:頭の上の表示(BillboardGui "StateSign")と、行動の名前を伝える Attribute "EnemyState" もここ(SetState)。
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -66,6 +67,63 @@ local function attachHat(model: Model, scale: number)
 	-- 山:つばの上に、少し細く高く
 	local crown = makeDisc("HatCrown", crownHeight, crownDiameter, head, headTop + brimThickness + crownHeight / 2)
 	crown.Parent = model
+end
+
+-- ===== 頭の上の表示(仕様書 014 の 2) =====
+-- 名前:クライアントの演出も、この名前で探すことがある
+local SIGN_NAME = "StateSign"
+local SIGN_LABEL_NAME = "Label"
+-- 行動の名前を入れる Attribute(属性)の名前。Attribute は、モデルにつけられる「名前つきのメモ」で、クライアントも読める
+local STATE_ATTRIBUTE_NAME = "EnemyState"
+
+-- 頭の上の表示(BillboardGui = 3D空間に置く、いつもこちらを向く看板)を、頭につける。
+-- 大きさ・高さは scale 倍(巨人の頭の上でも読める大きさ)。最初は非表示(Enabled = false)。
+-- 頭がなければ、何もしない
+local function attachStateSign(model: Model, scale: number)
+	local head = model:FindFirstChild("Head")
+	if not head or not head:IsA("BasePart") then
+		warn("[FarmerModel] Head が見つからないので、頭の上の表示をつけられません")
+		return
+	end
+	local signWidth = Config.FarmerSignSize.X * scale
+	local signHeight = Config.FarmerSignSize.Y * scale
+	-- 頭の中心から、「頭のてっぺん + 帽子 + すきま + 表示の高さの半分」だけ上
+	local hatHeight = (Config.FarmerHatBrimThickness + Config.FarmerHatCrownHeight) * scale
+	local offsetY = head.Size.Y / 2 + hatHeight + Config.FarmerSignGap * scale + signHeight / 2
+
+	local gui = Instance.new("BillboardGui")
+	gui.Name = SIGN_NAME
+	gui.Adornee = head
+	gui.AlwaysOnTop = true -- 稲や壁にかくれず、いつも手前に見える
+	gui.Size = UDim2.fromScale(signWidth, signHeight) -- Scale は「スタッド」の大きさ
+	gui.StudsOffsetWorldSpace = Vector3.new(0, offsetY, 0)
+	gui.MaxDistance = Config.FarmerSignMaxDistance
+	gui.LightInfluence = 0 -- 暗い時間帯でも、文字は明るいまま
+	gui.Enabled = false
+
+	local label = Instance.new("TextLabel")
+	label.Name = SIGN_LABEL_NAME
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1 -- 背景なし
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBold -- 太い字
+	label.Text = Config.FarmerSignAlertText
+	label.TextColor3 = Config.FarmerSignAlertColor
+	label.TextStrokeColor3 = Config.FarmerSignStrokeColor
+	label.TextStrokeTransparency = 0
+	label.Parent = gui
+
+	gui.Parent = head
+end
+
+-- 表示の文字と色を決めて、見えるようにする
+local function showSign(sign: BillboardGui, text: string, color: Color3)
+	local label = sign:FindFirstChild(SIGN_LABEL_NAME)
+	if label and label:IsA("TextLabel") then
+		label.Text = text
+		label.TextColor3 = color
+	end
+	sign.Enabled = true
 end
 
 -- 簡単な Part を1つ作る(簡易モデル用)
@@ -194,6 +252,7 @@ function FarmerModel.Create(): (Model, number)
 		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff -- 体力バーも出さない
 	end
 	attachHat(model, scale) -- 大きくしたあとで、同じ倍率の帽子をつける
+	attachStateSign(model, scale) -- 頭の上の「!」「?」(最初は非表示)。簡易モデルにも、Head があればつく
 	return model, scale
 end
 
@@ -214,6 +273,25 @@ function FarmerModel.PlaceAt(model: Model, point: Vector3)
 	model:PivotTo(CFrame.new(point.X, current.Position.Y, point.Z)) -- まず横位置だけ合わせる
 	local diff = targetFootY - FarmerModel.GetFootY(model)
 	model:PivotTo(model:GetPivot() + Vector3.new(0, diff, 0)) -- 次に、高さだけを足りない分ずらす
+end
+
+-- 行動の名前(Patrol / Notice / Chase / Search)を、Attribute "EnemyState" に入れ、頭の上の表示を切り替える。
+-- EnemyService が、行動が切り替わるたびに呼ぶ(Definition.OnBehaviorChanged)。
+--   Notice・Chase:赤い「!」 / Search:黄色い「?」 / それ以外(Patrol など):非表示
+-- モデルが壊れていて、表示が見つからなくても、エラーにしない
+function FarmerModel.SetState(model: Model, stateName: string)
+	model:SetAttribute(STATE_ATTRIBUTE_NAME, stateName)
+	local sign = model:FindFirstChild(SIGN_NAME, true)
+	if not sign or not sign:IsA("BillboardGui") then
+		return
+	end
+	if stateName == "Notice" or stateName == "Chase" then
+		showSign(sign, Config.FarmerSignAlertText, Config.FarmerSignAlertColor)
+	elseif stateName == "Search" then
+		showSign(sign, Config.FarmerSignSearchText, Config.FarmerSignSearchColor)
+	else
+		sign.Enabled = false
+	end
 end
 
 -- 動きの計算をサーバーが持つようにする(Workspace に入れたあとで呼ぶ)

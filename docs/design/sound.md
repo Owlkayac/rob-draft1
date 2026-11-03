@@ -16,6 +16,9 @@ ID を入れると、その音だけが鳴り始める。
 | `Eat` | 餌を食べたとき(仕様書 012 でつないだ。`SoundController.PlayEat()`) | 各自の端末 |
 | `Caught` | つかまったとき(1回だけ) | 各自の端末 |
 | `Clear` | クリアしたとき(1回だけ) | 各自の端末 |
+| `FarmerNoticed` | 農家さんが `Notice`(気づく)に変わった瞬間(1回。3D。仕様書 014) | 農家さんの `HumanoidRootPart` の下(`EnemyPresenceController` が作る) |
+| `FarmerStep` | 農家さんの足が地面につくたび(3D。遠いと小さい。`FarmerStepRollOffMin/Max`。仕様書 014) | 農家さんの `HumanoidRootPart` の下 |
+| `Heartbeat` | 農家さんが `Notice`・`Chase` で近いあいだ(くり返し。近いほど大きい。`FarmerHeartbeat...`。仕様書 014) | 各自の端末(`SoundService`) |
 
 ## 鳴らすまでの手順
 1. Roblox の **Creator Store**(クリエイターストア。みんなが作った素材を探せる場所)を開き、種類を「オーディオ」にして、使ってよい音を探す。

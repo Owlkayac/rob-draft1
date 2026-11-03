@@ -6,8 +6,14 @@
 
 -- 数字の表。名前(文字)→ 数字。
 -- 数字の名前の例: WalkSpeed, ChaseSpeed, SightDistance, CatchDistance, CatchHiddenDistance,
--- PatrolArriveDistance, WaypointReachDistance, AgentRadius, AgentHeight, LoseSightSeconds, SearchSeconds,
--- Speed(稲刈り機の進む速さ)
+-- PatrolArriveDistance, WaypointReachDistance, AgentRadius, AgentHeight,
+-- LoseSightSecondsMin / LoseSightSecondsMax, SearchSecondsMin / SearchSecondsMax(最小・最大のあいだでランダムに決める),
+-- Speed(稲刈り機の進む速さ)。
+-- 仕様書 014 のランダム性の数字(農家さん): RoamPointChance, RoamWallMargin, PauseChance, PauseSecondsMin / Max,
+-- WalkSpeedJitter, LookAroundMaxRad, PauseTurnRadPerSecond, HunchIntervalMin / Max, HunchChance, HunchErrorRadius,
+-- NoticeSecondsMin / Max, NoticeTurnRadPerSecond, BurstIntervalMin / Max, BurstSeconds, BurstMultiplier,
+-- StumbleIntervalMin / Max, StumbleSeconds, ChaseSpeedMax, SearchRoamRadius, SearchRoamSpotsMin / Max,
+-- StartGraceSeconds(稲刈り機: SpeedJitter)。書かない数字の機能は、使われない(バースト・つまずきなど)か、既定の動きになる
 export type StatTable = { [string]: number }
 
 -- 見える相手1人ぶんの情報
@@ -59,6 +65,7 @@ export type Definition = {
 	FindBody: ((model: Model) -> (Humanoid?, BasePart?))?, -- 体の部品を探す。Humanoid を使わない天敵用(root が nil なら作成失敗)。ない天敵は人型を探す
 	IsModelUsable: ((ctx: Context) -> boolean)?, -- モデルがまだ使えるか。Humanoid を使わない天敵用。ない天敵は人型の確認
 	SkipScan: boolean?, -- true なら、毎回の「見回し」(Perception.Scan)をしない。見ない天敵向け
+	OnBehaviorChanged: ((model: Model, behaviorName: string) -> ())?, -- 行動が切り替わるたびに呼ばれる(農家さん: EnemyState と頭の上の表示)。ない天敵は何もしない
 }
 
 -- 天敵1体の「実行時の状態」(コンテキスト)。行動の関数に渡される
@@ -74,6 +81,8 @@ export type Context = {
 	SwitchCount: number, -- 行動を切り替えた回数(待っている間に切り替わったかの確認用)
 	LastTickAt: number, -- 前回の判断の時刻(os.clock)
 	Finished: boolean, -- 行動が「終わった」印。立てると、EnemyService が天敵を消す(稲刈り機が田んぼを出たとき)
+	Random: Random, -- この天敵だけの乱数(EnemyRandom.New で作る。Config.EnemyRandomSeed が 0 以外なら固定)
+	GraceUntil: number, -- この時刻(os.clock)までは、見回り・探すで、プレイヤーを見つけない(出現直後の公平さ。0 なら関係なし)
 
 	-- 今回の判断で見えたもの(Perception.Scan が毎回入れる)
 	Target: Target?, -- いちばん近い「見える相手」

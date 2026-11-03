@@ -12,7 +12,9 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local FieldService = require(script.Parent.FieldService)
 local RoundService = require(script.Parent.RoundService)
 local Types = require(script.Parent.Enemy.Types)
+local Stats = require(script.Parent.Enemy.Stats)
 local Perception = require(script.Parent.Enemy.Perception)
+local EnemyRandom = require(script.Parent.Enemy.EnemyRandom)
 local WarnOnce = require(script.Parent.Enemy.WarnOnce)
 local Movement = require(script.Parent.Enemy.Movement)
 local Farmer = require(script.Parent.Enemy.Definitions.Farmer)
@@ -46,6 +48,31 @@ local loopRunning = false -- いま動きのループが動いているか
 
 -- ===== 行動の切り替え =====
 
+-- 行動が切り替わったことを、定義に知らせる(農家さん:Attribute "EnemyState" と、頭の上の「!」「?」)。
+-- 定義が OnBehaviorChanged を持たなければ何もしない。モデルが壊れていても、エラーにしない(警告は1回だけ)
+local function notifyBehaviorChanged(ctx: Types.Context, behaviorName: string)
+	local callback = ctx.Definition.OnBehaviorChanged
+	if callback == nil then
+		return
+	end
+	local ok, err = pcall(callback, ctx.Model, behaviorName)
+	if not ok then
+		WarnOnce.Warn(
+			`state:{ctx.Definition.Name}:{tostring(err)}`,
+			`[EnemyService] {ctx.Definition.Name} の状態の公開でエラー: {err}`
+		)
+	end
+end
+
+-- 出現直後の猶予を始める(仕様書 014 の 1-5)。猶予の数字(StartGraceSeconds)を持たない天敵は、猶予なし
+local function startGrace(ctx: Types.Context)
+	if ctx.Definition.BaseStats["StartGraceSeconds"] == nil then
+		ctx.GraceUntil = 0
+		return
+	end
+	ctx.GraceUntil = os.clock() + Stats.Get(ctx.Definition, "StartGraceSeconds", nil)
+end
+
 -- 行動を切り替える。いまの行動の Exit → 新しい行動の Enter の順に呼ぶ。
 -- 同じ名前への切り替えも、やり直しとして行う
 local function switchBehavior(ctx: Types.Context, name: string)
@@ -69,6 +96,7 @@ local function switchBehavior(ctx: Types.Context, name: string)
 	end
 	ctx.BehaviorName = nextName
 	ctx.SwitchCount += 1
+	notifyBehaviorChanged(ctx, nextName)
 	nextBehavior.Enter(ctx)
 end
 
@@ -120,6 +148,8 @@ local function newContext(
 		SwitchCount = 0,
 		LastTickAt = os.clock(),
 		Finished = false,
+		Random = EnemyRandom.New(), -- この天敵だけの乱数(Config.EnemyRandomSeed が 0 以外なら固定)
+		GraceUntil = 0,
 		Target = nil,
 		AnyPlaying = false,
 		ChasePlayer = nil,
@@ -201,6 +231,7 @@ local function buildEnemy(slot: Slot): boolean
 		error("体の部品(HumanoidRootPart など)が足りません")
 	end
 	local ctx = newContext(definition, model, humanoid, root, point)
+	startGrace(ctx) -- 出現直後は、少しの間、プレイヤーを見つけない
 	slot.Ctx = ctx
 	switchBehavior(ctx, definition.InitialBehavior)
 	return true
@@ -368,6 +399,7 @@ local function restartSlot(slot: Slot): boolean
 		return spawnEnemy(slot)
 	end
 	ctx.Definition.PlaceAt(ctx.Model, ctx.SpawnPoint) -- 横位置を戻し、足元の高さも補正し直す
+	startGrace(ctx) -- 「もう一度」の直後も、少しの間、プレイヤーを見つけない
 	switchBehavior(ctx, ctx.Definition.InitialBehavior)
 	Movement.Stop(ctx)
 	return false

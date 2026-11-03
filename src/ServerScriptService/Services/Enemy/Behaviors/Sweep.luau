@@ -1,6 +1,8 @@
 --!strict
 -- 行動「刈り取り」: 稲刈り機の動き。(仕様書 006)
 -- 田んぼの西のはしの1本目の線から始め、北→南→北…と往復しながら、線ごとに東へ HarvesterWidth ずつずれる。
+-- 仕様書 014:出番になるたびに、入る側をランダムに決める(西 or 東)。東から入るときは、経路を左右反転する
+-- (線の数・順番・長さは同じ)。向きは、進む向きに合わせて自動で合う。線ごとに、速さを ±SpeedJitter でゆらす。
 -- 北のはしの外側から入り、最後の線を終えて田んぼの外に出たら、ctx.Finished を立てる(EnemyService が消す)。
 -- Humanoid も経路探索も使わない。Enter で RunService.Heartbeat(毎フレームの合図)につなぎ、
 -- 毎フレーム、少しずつ進めて model:PivotTo で動かす。Exit で必ず切る(つなぎっぱなしにしない)。
@@ -12,6 +14,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 local Types = require(script.Parent.Parent.Types)
 local Stats = require(script.Parent.Parent.Stats)
+local EnemyRandom = require(script.Parent.Parent.EnemyRandom)
 local SweepRoute = require(script.Parent.Parent.SweepRoute)
 -- Behaviors → Enemy → Services の順に上がって、FieldService を読み込む(FieldService は Config だけを使うので、循環しない)
 local FieldService = require(script.Parent.Parent.Parent.FieldService)
@@ -24,6 +27,7 @@ type SweepState = {
 	Total: number, -- 経路全体の長さ
 	Distance: number, -- いままで進んだ長さ
 	Segment: number, -- いま走っている区間の番号(Points[Segment] → Points[Segment + 1])
+	SpeedFactors: { number }, -- 区間ごとの、速さにかける倍率(線ごとにランダム。線と線の間のずれは、前の線と同じ)
 	WaitLeft: number, -- 動き始めるまでの残り秒数
 	Emitting: boolean, -- 粒子(刈りくず・土ぼこり)とエンジン音が出ている最中か。変わったときだけ書く
 }
@@ -43,6 +47,20 @@ local function segmentDirection(state: SweepState, segment: number): Vector3
 		return Vector3.new(0, 0, 1)
 	end
 	return delta.Unit
+end
+
+-- 区間ごとの速さの倍率を作る。線(奇数番目の区間)ごとにランダムに決め、
+-- 線と線の間をつなぐ区間(偶数番目)は、前の線と同じ倍率にする
+local function buildSpeedFactors(ctx: Types.Context, segmentCount: number): { number }
+	local factors: { number } = {}
+	for segment = 1, segmentCount do
+		if segment % 2 == 1 then
+			factors[segment] = EnemyRandom.Jitter(ctx, "SpeedJitter")
+		else
+			factors[segment] = factors[segment - 1]
+		end
+	end
+	return factors
 end
 
 -- 進んだ長さに合わせて、区間の番号を進める
@@ -114,7 +132,7 @@ local function step(ctx: Types.Context, state: SweepState, frameSeconds: number)
 		return
 	end
 	setEmitting(ctx.Model, state, true) -- 実際に進んでいる間だけ粒子を出す
-	local speed = Stats.Get(ctx.Definition, "Speed", nil)
+	local speed = Stats.Get(ctx.Definition, "Speed", nil) * (state.SpeedFactors[state.Segment] or 1)
 	state.Distance = math.min(state.Distance + dt * speed, state.Total)
 	advanceSegment(state)
 
@@ -136,7 +154,8 @@ local function enter(ctx: Types.Context)
 	if old then
 		disconnect(old) -- 念のため:前のつなぎが残っていたら切る
 	end
-	local points = SweepRoute.Build()
+	local fromEast = ctx.Random:NextInteger(0, 1) == 1 -- 入る側:毎回、ランダムに西か東
+	local points = SweepRoute.Build(fromEast)
 	local state: SweepState = {
 		Connection = nil,
 		Points = points,
@@ -144,6 +163,7 @@ local function enter(ctx: Types.Context)
 		Total = 0,
 		Distance = 0,
 		Segment = 1,
+		SpeedFactors = buildSpeedFactors(ctx, #points - 1),
 		WaitLeft = Config.HarvesterEntryDelaySeconds,
 		Emitting = false,
 	}

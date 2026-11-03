@@ -71,7 +71,7 @@ end
 
 -- Lighting 直下から効果を探す。順番:
 --   1. 自分の名前(name)で探す(二重に作らない)
---   2. なければ、同じ種類(className)の最初の1つを使う
+--   2. なければ、同じ種類(className)の最初の1つを使う(SeparateEffect の目印があるものは除く)
 --      (Studio のテンプレートが、最初から Atmosphere や Bloom を持っていることがあるため。同じ種類を2つ置かない)
 --   3. どちらもなければ、名前をつけて作る
 -- 戻り値の2つめは「自分で作ったか」
@@ -80,9 +80,11 @@ local function findOrCreate(className: string, name: string): (Instance, boolean
 	if byName and byName.ClassName == className then
 		return byName, false
 	end
-	local byClass = Lighting:FindFirstChildOfClass(className)
-	if byClass then
-		return byClass, false
+	-- 他の部品が専用に作ったもの(SeparateEffect の目印つき。例: 緊張の色補正)は、拾わない
+	for _, child in Lighting:GetChildren() do
+		if child.ClassName == className and child:GetAttribute("SeparateEffect") ~= true then
+			return child, false
+		end
 	end
 	local made = Instance.new(className)
 	made.Name = name

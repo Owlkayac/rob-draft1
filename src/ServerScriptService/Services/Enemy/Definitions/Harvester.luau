@@ -57,7 +57,9 @@ end
 
 -- 置く:見回り地点の代わりに、いつも入り口(北のはしの外)に置く。point は使わない
 local function placeAt(model: Model, _point: Vector3)
-	model:PivotTo(CFrame.lookAt(SweepRoute.GetStartPoint(), SweepRoute.GetStartPoint() + SweepRoute.GetStartDirection()))
+	-- 入る側(西か東)は、Sweep の Enter で決めて、そこで置き直す。ここでは、とりあえず西の入り口に置く
+	local start = SweepRoute.GetStartPoint(false)
+	model:PivotTo(CFrame.lookAt(start, start + SweepRoute.GetStartDirection()))
 end
 
 local function onPlaced(_model: Model)
@@ -72,6 +74,7 @@ local Harvester: Types.Definition = {
 	OnPlaced = onPlaced,
 	BaseStats = {
 		Speed = Config.HarvesterSpeed,
+		SpeedJitter = Config.HarvesterSpeedJitter, -- 線ごとの速さのゆらぎ(±。仕様書 014)
 	},
 	Behaviors = {
 		Sweep = Sweep,

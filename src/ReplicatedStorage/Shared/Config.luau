@@ -84,8 +84,9 @@ local Config = {
 	-- 段階2・3に切り替わる経過時間(秒)。
 	-- 3つめ(出穂の始まり)は、稲刈り機(仕様書 006)が走り切る時間から決める:
 	--   経路の長さ ÷ HarvesterSpeed + HarvesterEntryDelaySeconds < RoundSeconds - 出穂の始まり
-	--   (約1500 ÷ 13 ≒ 117秒 + 3秒 = 120秒 < 300 - 170 = 130秒)。速さ・幅を変えたら、ここも見直す
-	GrowthStageSeconds = { 75, 170 },
+	--   (約1500 ÷ 13 ≒ 117秒 + 3秒 = 120秒 < 300 - 165 = 135秒)。速さ・幅を変えたら、ここも見直す。
+	--   速さのゆらぎ(HarvesterSpeedJitter)を入れた最悪の場合は、HarvesterSpeedJitter のコメントを見る
+	GrowthStageSeconds = { 75, 165 },
 	SightMultipliers = { 1.0, 0.8, 0.6 }, -- 段階ごとの、天敵の発見距離の倍率
 	StageNames = { "田植え", "成長", "出穂", "稲刈りの日" }, -- 段階の名前
 	CharacterWaitSeconds = 10, -- キャラクターの Humanoid が現れるのを待つ最大の時間(秒)
@@ -106,8 +107,55 @@ local Config = {
 	FarmerSightDistance = 30, -- 発見できる距離。大きさの倍率はかけない(稲の成長で倍率がかかる)
 	FarmerCatchDistance = 4, -- 捕まえる距離(潜っていないとき。標準サイズ基準)
 	FarmerCatchHiddenDistance = 2, -- 捕まえる距離(潜っているとき。標準サイズ基準。仕様書 002 の 9)
-	FarmerLoseSightSeconds = 4, -- 見失ってから、見回りに戻るまでの時間(秒)
-	FarmerSearchSeconds = 3, -- 潜った場所を探す時間(秒)
+	-- 農家さんのランダム性と臨場感(仕様書 014。調整のしかたは docs/design/enemy-behavior-random.md)
+	-- 注意: 「時間」「間隔」の数字は 0 にしない(コード側でも 0.001 秒より小さくしないが、0 にしない約束)。Min は Max 以下にする
+	EnemyRandomSeed = 0, -- 乱数の種。0 なら毎回ちがう動き。0 以外なら、その数字で動きを固定する(デバッグ用)
+	-- 見回り(仕様書 014 の 1-1)
+	FarmerRoamPointChance = 0.5, -- 次の行き先を「田んぼの中のランダムな点」にする確率(0〜1)。残りは見回り地点(直前の地点以外)
+	FarmerRoamWallMargin = 15, -- ランダムな点を、壁からこれ以上はなす(スタッド)
+	FarmerPauseChance = 0.4, -- 行き先に着いたとき、立ち止まる確率(0〜1)
+	FarmerPauseSecondsMin = 1.0, -- 立ち止まる時間の最小(秒)。0 にしない
+	FarmerPauseSecondsMax = 3.0, -- 立ち止まる時間の最大(秒)
+	FarmerWalkSpeedJitter = 0.12, -- 見回りの歩く速さのゆらぎ(0.12 = ±12%。1回の移動ごと)。1 未満にする
+	FarmerPatrolTargetTimeoutSeconds = 20, -- 見回りの行き先に、この時間(秒)以内に着かなければ、その行き先を捨てて選び直す(着けないときの保険)。0 にしない
+	FarmerLookAroundMaxDeg = 100, -- 立ち止まっているとき、きょろきょろする角度の最大(度。いまの向きから±この値)
+	FarmerPauseTurnDegPerSecond = 60, -- きょろきょろするときの、向きを変える速さ(度/秒。小さいほどゆっくり)
+	FarmerHunchIntervalMin = 8, -- 「勘」を働かせる間隔の最小(秒)。0 にしない
+	FarmerHunchIntervalMax = 14, -- 「勘」を働かせる間隔の最大(秒)
+	FarmerHunchChance = 0.5, -- 間隔が来たとき、「勘」で、プレイヤーのほうへ向かう確率(0〜1)。見つけたことにはならない
+	FarmerHunchErrorRadius = 22, -- 「勘」で向かう場所の、本当の位置からのずれ(スタッド)
+	-- 気づく(仕様書 014 の 1-2 と 2)
+	FarmerNoticeSecondsMin = 0.4, -- 見つけてから走り出すまでの、立ち止まる時間の最小(秒)。0 にしない(公平さのため、これ以上かかる)
+	FarmerNoticeSecondsMax = 0.9, -- 同じく最大(秒)
+	FarmerNoticeTurnDegPerSecond = 360, -- 気づいたとき、相手のほうを向く速さ(度/秒)
+	-- 追跡(仕様書 014 の 1-2)
+	FarmerBurstIntervalMin = 4, -- ダッシュ(短く速くなる)する間隔の最小(秒)。0 にしない
+	FarmerBurstIntervalMax = 9, -- 同じく最大(秒)
+	FarmerBurstSeconds = 1.0, -- ダッシュの長さ(秒)。0 にしない
+	FarmerBurstMultiplier = 1.12, -- ダッシュ中の速さの倍率(FarmerChaseSpeed にかける)
+	FarmerStumbleIntervalMin = 6, -- つまずく間隔の最小(秒)。0 にしない
+	FarmerStumbleIntervalMax = 14, -- 同じく最大(秒)
+	FarmerStumbleSeconds = 0.35, -- つまずいて足が止まる時間(秒)。0 にしない
+	FarmerChaseMaxSpeedRatio = 1.05, -- 追跡の速さの上限。CrayfishWalkSpeed のこの倍を超えない(公平さ。ダッシュしても超えない)
+	FarmerLoseSightSecondsMin = 3, -- 見失ってから、見回りに戻るまでの時間の最小(秒)。追跡に入るたびに、最小〜最大から決める。0 にしない
+	FarmerLoseSightSecondsMax = 6, -- 同じく最大(秒)
+	-- 探す(仕様書 014 の 1-3)
+	FarmerSearchSecondsMin = 2, -- 探す時間の最小(秒)。0 にしない
+	FarmerSearchSecondsMax = 5, -- 探す時間の最大(秒)
+	FarmerSearchRoamRadius = 18, -- 探すとき、最後に見えた位置から、この半径の中を歩く(スタッド)
+	FarmerSearchRoamSpotsMin = 1, -- 探すとき、歩き回る場所の数の最小(整数)
+	FarmerSearchRoamSpotsMax = 2, -- 同じく最大(整数)
+	-- 公平さ(仕様書 014 の 1-5)
+	FarmerStartGraceSeconds = 3, -- 出現(作られたとき・「もう一度」)から、この間は、プレイヤーを見つけない(秒)
+	-- 頭の上の表示(「!」と「?」。仕様書 014 の 2)。大きさと高さの数字は「標準サイズ基準」で、実際は × FarmerScale
+	FarmerSignSize = Vector2.new(2.5, 2.5), -- 表示の大きさ(幅, 高さ。スタッド)
+	FarmerSignGap = 0.3, -- 帽子のてっぺんから、表示の下までのすきま(スタッド)
+	FarmerSignMaxDistance = 500, -- 表示が見える最大の距離(スタッド)。田んぼの外からも見えるように、大きくしておく
+	FarmerSignAlertText = "!", -- 気づく・追跡のときの文字
+	FarmerSignAlertColor = Color3.fromRGB(235, 40, 40), -- その色(赤)
+	FarmerSignSearchText = "?", -- 探すときの文字
+	FarmerSignSearchColor = Color3.fromRGB(245, 205, 40), -- その色(黄)
+	FarmerSignStrokeColor = Color3.fromRGB(0, 0, 0), -- 文字のふちの色(読みやすくする)
 	FarmerSpawnMargin = 0.2, -- 出現位置の高さの余裕(ゆかにめり込まないように、少しだけ上に置く)
 	EnemyTickSeconds = 0.2, -- 動きの判断をする間隔(秒)
 	EnemyRepathSeconds = 0.5, -- 経路を作り直す間隔(秒)
@@ -125,6 +173,12 @@ local Config = {
 	HarvesterLaneMargin = 7, -- 田んぼのはしから、1本目の線(と東の最後の線)までの距離
 	-- 経路の長さ ≒ 線の数 ×(FieldSize + HarvesterLength×2)+ 線の間のずれ。いまは線9本で約1500
 	HarvesterActiveStage = 3, -- 稲刈り機の出番になる稲の段階(3 = 出穂)
+	-- 稲刈り機のランダム性(仕様書 014 の 1-4)。入る側(西か東)は、出番になるたびにランダム。
+	-- 速さのゆらぎ: 線ごとに、HarvesterSpeed を ±この割合でゆらす(0.08 = ±8%)。
+	-- 注意: いちばん遅い場合でも、ラウンドの中に収まること:
+	--   経路の長さ(いまは約1510) ÷ (HarvesterSpeed × (1 - ゆらぎ)) + HarvesterEntryDelaySeconds + 出穂の始まり < RoundSeconds
+	--   (1510 ÷ (13 × 0.92) ≒ 126.3秒。165 + 3 + 126.3 + 最大1.2秒(段階更新の1秒刻みと、判断の間隔) ≒ 295.5秒 < 300秒で、収まる)。ゆらぎを大きくしたら、GrowthStageSeconds の2つめも見直す
+	HarvesterSpeedJitter = 0.08,
 	HarvesterMaxStepSeconds = 0.25, -- 1フレームで進める時間の上限(秒)。重いときに瞬間移動しないため
 
 	-- 稲刈り機の見た目(図形だけ。外部素材は使わない)
@@ -209,6 +263,41 @@ local Config = {
 	FarmerFallbackRootSize = Vector3.new(2, 2, 1), -- 簡易モデル:HumanoidRootPart の大きさ(見えない)
 	FarmerFallbackTorsoSize = Vector3.new(2, 3, 1), -- 簡易モデル:胴の大きさ
 	FarmerFallbackHeadSize = Vector3.new(1.6, 1.6, 1.6), -- 簡易モデル:頭の大きさ
+
+	-- 農家さんの歩き・足音の揺れ・近づく緊張(仕様書 014 の 3。クライアントの EnemyPresenceController が使う。調整のしかたは docs/design/enemy-presence.md)
+	-- 注意: 「距離」「時間」で割る数字(Stride、MaxDistance、DecaySeconds、Hz、Seconds など)は 0 にしない(コード側でも 0.001 より小さくはしない)
+	-- 巨人の歩き
+	FarmerStrideStuds = 9, -- 足が1歩(足が地面につく間隔)で進む距離の目安(スタッド)。巨人なので大きめ。0 にしない
+	FarmerLegSwingDeg = 30, -- 足の前後のふり(度)
+	FarmerArmSwingDeg = 22, -- 腕の前後のふり(度。足と逆向き)
+	FarmerKneeBendDeg = 35, -- 足を前へ出すときの、膝の曲がり(度)。0 なら曲げない
+	FarmerBobStuds = 0.15, -- 歩くときの、体の上下(スタッド)
+	FarmerMaxPlausibleSpeed = 60, -- 位置の差から求めた速さが、これ(スタッド/秒)を超えたら、テレポートとみなして無視する(やり直しで出現位置に戻るときなど)
+	FarmerMoveMinSpeed = 0.5, -- この速さ(スタッド/秒)以下なら、止まっているとみなす
+	FarmerAnimBlendPerSecond = 8, -- 歩く・止まる・気づくなどの切り替えのなめらかさ(大きいほど素早い)
+	FarmerNoticeArmRaiseDeg = 40, -- 気づいたとき、腕を前へ持ち上げる角度(度)
+	FarmerSearchNeckSwingDeg = 50, -- 探すとき、首を左右にふる角度(度)
+	FarmerSearchNeckHz = 0.9, -- 首をふる速さ(1秒あたりの往復回数)
+	FarmerIdleBreathDeg = 2, -- 止まっているときの、息づかい(体のゆれ)の大きさ(度)
+	FarmerIdleBreathSeconds = 3, -- 息づかいの周期(秒)。0 にしない
+	-- 足音の揺れ(足が地面につくたびに、カメラが上下にはねる)
+	FarmerShakeMaxDistance = 60, -- この距離(スタッド)より遠いと、揺れない。0 にしない
+	FarmerShakeMaxOffset = 0.35, -- いちばん近いときの、カメラのはね(スタッド)
+	FarmerShakeDecaySeconds = 0.18, -- はねが元に戻る速さの目安(秒。小さいほど短くはねる)。0 にしない
+	-- 近づく緊張(Notice か Chase の農家さんが近いほど、画面が赤く・暗くなる)
+	FarmerThreatMaxDistance = 45, -- この距離(スタッド)より遠いと、緊張しない。0 にしない
+	FarmerThreatTint = Color3.fromRGB(255, 150, 150), -- 緊張が最大のときの、画面の色合い(赤み)
+	FarmerThreatSaturation = 0.25, -- 緊張が最大のときの、彩度(プラスで鮮やか)
+	FarmerThreatBrightness = -0.08, -- 緊張が最大のときの、明るさ(マイナスで暗い)
+	FarmerThreatSmoothRate = 5, -- 緊張がなめらかに近づく速さ(大きいほど速い)
+	FarmerThreatUpdateEpsilon = 0.002, -- 緊張の変化がこれより小さい間は、画面を更新しない(軽くするため)
+	-- 心臓の音(IDが空なら鳴らさない)
+	FarmerHeartbeatOnThreshold = 0.02, -- 緊張の強さがこれを超えたら鳴らし、以下なら止める
+	FarmerHeartbeatVolumeEpsilon = 0.005, -- 心臓の音の音量が、これより小さくしか変わらない間は、更新しない
+	FarmerHeartbeatMinVolumeRatio = 0.2, -- 鳴っているときの、音量の割合の最小(SoundVolumes.Heartbeat に、緊張の強さを0〜1でかけ、この値〜1に収める)
+	-- 足音・気づいた音の3D(遠いほど小さく、この距離より遠いと聞こえない。巨人なので稲刈り機より広め)
+	FarmerStepRollOffMin = 20, -- この距離までは、音量が下がらない
+	FarmerStepRollOffMax = 150, -- これより遠いと聞こえない
 
 	-- 稲の株と成長(仕様書 007)。数字は仮の初期値
 	RiceJitter = 1.2, -- 株の位置の、ランダムなずれの最大(スタッド)
@@ -326,6 +415,9 @@ local Config = {
 		Caught = "", -- つかまったとき
 		Clear = "", -- クリアしたとき
 		Jet = "", -- ジェットを噴射したとき(仕様書 013)
+		FarmerNoticed = "", -- 農家さんが気づいたとき(仕様書 014。クライアントの演出が鳴らす)
+		FarmerStep = "", -- 農家さんの足音(仕様書 014。足が地面につくたび・3D)
+		Heartbeat = "", -- 心臓の音(仕様書 014。追われているとき・くり返し)
 	} :: { [string]: string },
 	-- 音量(0〜1)。種類ごと。ここにない種類は 0.5
 	SoundVolumes = {
@@ -336,6 +428,9 @@ local Config = {
 		Caught = 0.7,
 		Clear = 0.7,
 		Jet = 0.5,
+		FarmerNoticed = 0.6,
+		FarmerStep = 0.7,
+		Heartbeat = 0.5,
 	} :: { [string]: number },
 	SoundHarvesterRollOffMaxDistance = 120, -- 稲刈り機の音が届く距離(これより遠いと聞こえない)
 	SoundHarvesterRollOffMinDistance = 15, -- この距離までは、音量が下がらない
