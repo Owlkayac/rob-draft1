@@ -28,6 +28,9 @@ local RoundService = {}
 local rounds: { [Player]: PlayerRound } = {}
 -- 稲の見た目は田んぼ全体で1つ。一人用の間は、いちばん新しく始めたラウンドの人に合わせる
 local latestPlayer: Player? = nil
+-- 稲の見た目を最後に更新した時刻(os.clock)と、そのときの段階。RiceGrowthUpdateSeconds ごとに更新する
+local lastRiceUpdateAt = 0
+local lastRiceStage = 1
 -- 「やり直すとき」に呼んでほしい関数(天敵の担当が登録する)
 local restartCallbacks: { () -> () } = {}
 local stateRemote: RemoteEvent? = nil
@@ -84,6 +87,9 @@ local function finishRound(player: Player, round: PlayerRound, newState: RoundSt
 	if newState == "Cleared" then
 		round.Remaining = 0
 		round.Stage = #Config.StageNames -- 「稲刈りの日」
+		if player == latestPlayer then
+			FieldService.SetGrowthProgress(1) -- 稲を育ちきった見た目にする
+		end
 	else
 		round.Remaining = calcRemaining(elapsed)
 	end
@@ -119,7 +125,9 @@ local function startRound(player: Player)
 	round.Stage = 1
 	round.Remaining = Config.RoundSeconds
 	latestPlayer = player
-	FieldService.SetGrowthStage(1)
+	FieldService.ResetRice() -- 稲を最初の状態(刈り株も元に戻す)にする
+	lastRiceUpdateAt = os.clock()
+	lastRiceStage = 1
 	sendState(player, round)
 end
 
@@ -139,6 +147,17 @@ local function onCharacterAdded(player: Player, character: Model)
 	end)
 end
 
+-- 稲の見た目を更新する。RiceGrowthUpdateSeconds ごと、または段階が変わったときだけ(重いので毎回はしない)
+local function updateRice(round: PlayerRound, elapsed: number)
+	local now = os.clock()
+	if now - lastRiceUpdateAt < Config.RiceGrowthUpdateSeconds and round.Stage == lastRiceStage then
+		return
+	end
+	lastRiceUpdateAt = now
+	lastRiceStage = round.Stage
+	FieldService.SetGrowthProgress(math.clamp(elapsed / Config.RoundSeconds, 0, 1))
+end
+
 -- 1秒ごとの更新:Playing 中の人の段階を計算し、クリア判定と通知をする
 local function updateRounds()
 	for player, round in rounds do
@@ -151,9 +170,9 @@ local function updateRounds()
 				round.Remaining = calcRemaining(elapsed)
 				sendState(player, round)
 			end
-			-- 稲の見た目は、いちばん新しく始めた人の段階に合わせる(変わったときだけ作業される)
+			-- 稲の見た目は、いちばん新しく始めた人の進み具合に合わせる
 			if player == latestPlayer and round.State == "Playing" then
-				FieldService.SetGrowthStage(round.Stage)
+				updateRice(round, elapsed)
 			end
 		end
 	end
@@ -177,7 +196,7 @@ local function onRestartRequest(player: Player, ...: unknown)
 	end
 	round.LastRestartAt = now
 
-	FieldService.SetGrowthStage(1) -- 稲を最初に戻す
+	FieldService.ResetRice() -- 稲を最初に戻す(刈り株も元に戻る)
 	for _, callback in restartCallbacks do -- 天敵などを最初に戻す
 		task.spawn(callback)
 	end

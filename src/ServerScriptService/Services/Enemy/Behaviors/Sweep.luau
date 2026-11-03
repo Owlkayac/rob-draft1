@@ -13,6 +13,8 @@ local Config = require(ReplicatedStorage.Shared.Config)
 local Types = require(script.Parent.Parent.Types)
 local Stats = require(script.Parent.Parent.Stats)
 local SweepRoute = require(script.Parent.Parent.SweepRoute)
+-- Behaviors → Enemy → Services の順に上がって、FieldService を読み込む(FieldService は Config だけを使うので、循環しない)
+local FieldService = require(script.Parent.Parent.Parent.FieldService)
 
 -- 稲刈り機1台ぶんの、動きの記憶
 type SweepState = {
@@ -84,6 +86,8 @@ local function step(ctx: Types.Context, state: SweepState, frameSeconds: number)
 	local direction = segmentDirection(state, segment)
 	local along = state.Distance - state.Cumulative[segment]
 	placeModel(ctx.Model, startPoint + direction * along, direction)
+	-- 通ったところの稲を刈る。モデルの基準点は「真ん中の底」で、正面が -Z なので、そのまま長方形の中心にできる
+	FieldService.CutRice(ctx.Model:GetPivot(), Config.HarvesterWidth, Config.HarvesterLength)
 
 	if state.Distance >= state.Total then
 		finish(ctx, state)

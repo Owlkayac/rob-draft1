@@ -15,3 +15,7 @@ DiveController.Start()
 local GuiController = require(script.Parent.Controllers.GuiController)
 
 GuiController.Start()
+
+local LightingController = require(script.Parent.Controllers.LightingController)
+
+LightingController.Start()

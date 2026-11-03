@@ -27,9 +27,7 @@ local Config = {
 	FieldWallThickness = 2, -- あぜの厚さ
 	FieldFloorThickness = 1, -- ゆかの厚さ
 	FieldFloorTopY = 0.5, -- ゆかの上面の高さ(Baseplate の上面は y=0)
-	RiceSpacing = 8, -- 稲と稲の間隔
-	RiceWidth = 1, -- 稲1本の太さ
-	RiceHeights = { 2, 5, 9 }, -- 段階ごとの稲の高さ
+	RiceSpacing = 6, -- 稲の株と株の間隔(仕様書 007 で 8 から変更。重いと感じたら 8 に戻す)
 	SpawnSize = 6, -- スタート地点の一辺の長さ
 	SpawnEdgeOffset = 3, -- スタート地点を、南の端からどれだけ内側に置くか
 	PatrolPointHeight = 3, -- 見回り地点の、ゆかの上面からの高さ(歩ける高さ)
@@ -112,12 +110,95 @@ local Config = {
 	FarmerFallbackTorsoSize = Vector3.new(2, 3, 1), -- 簡易モデル:胴の大きさ
 	FarmerFallbackHeadSize = Vector3.new(1.6, 1.6, 1.6), -- 簡易モデル:頭の大きさ
 
-	-- 田んぼの色
+	-- 稲の株と成長(仕様書 007)。数字は仮の初期値
+	RiceJitter = 1.2, -- 株の位置の、ランダムなずれの最大(スタッド)
+	RiceBladeCount = 3, -- 1株の葉の数
+	RiceEarCount = 2, -- 1株の穂の数(葉の数以下)
+	RiceHeightMin = 2, -- 稲の高さの最小(育ち始め)
+	RiceHeightMax = 9, -- 稲の高さの最大(育ちきり)
+	RiceHeightVariation = 0.15, -- 株ごとの高さのばらつき(0.15 = ±15%)
+	RiceStubbleHeight = 0.5, -- 刈り株の高さ
+	RiceGrowthUpdateSeconds = 10, -- 育つ見た目の更新間隔(秒)
+	RiceRandomSeed = 20261103, -- 株の配置の乱数の種(同じ値なら、毎回同じ配置)
+	RiceBladeWidth = 0.5, -- 葉の幅
+	RiceBladeThickness = 0.08, -- 葉の厚さ
+	RiceBladeTiltMinDeg = 6, -- 葉の傾きの最小(度。0 = まっすぐ上)
+	RiceBladeTiltMaxDeg = 26, -- 葉の傾きの最大(度)
+	RiceEarLength = 1.8, -- 穂の長さ(育ちきったとき)
+	RiceEarThickness = 0.2, -- 穂の太さ
+	-- 穂の垂れ具合は「真上から何度、葉の倒れる向きへ傾けるか」。0 = 真上、90 = 真横、130 = 下向き気味、180 = 真下
+	-- 注意:0 や 180 にすると、穂の向きの計算(外積)が 0 になって壊れる。1〜179 の間にする
+	RiceEarDroopStartDeg = 10, -- 穂の垂れ具合(出始め)。0 にすると、穂の向きの計算が壊れるので、0 にしない
+	RiceEarDroopEndDeg = 130, -- 穂の垂れ具合(育ちきったとき。真上から130度 = 下向き気味)
+	RiceBladeYawJitter = 0.4, -- 葉の向き(横回り)のランダムなずれの最大(ラジアン。±この値)
+	RiceBladeLengthFactorMin = 0.75, -- 葉ごとの長さの割合の最小
+	RiceBladeLengthFactorMax = 1.0, -- 葉ごとの長さの割合の最大
+	RiceColorMidProgress = 0.5, -- 稲の色が「黄緑」になる育ち具合(0〜1)。ここまでが 緑 → 黄緑、ここから 黄緑 → 黄金
+
+	-- 田んぼの色と水
 	FieldColor = Color3.fromRGB(94, 70, 48), -- 泥の茶色
 	WallColor = Color3.fromRGB(105, 115, 65), -- あぜ道の緑がかった茶色
-	RiceGreenColor = Color3.fromRGB(90, 170, 70), -- 稲(段階1・2)
-	RiceGoldColor = Color3.fromRGB(230, 190, 50), -- 稲(段階3・出穂)
+	RiceGreenColor = Color3.fromRGB(90, 170, 70), -- 稲の色:育ち始め(緑)
+	RiceYellowGreenColor = Color3.fromRGB(160, 190, 60), -- 稲の色:途中(黄緑)
+	RiceGoldColor = Color3.fromRGB(230, 190, 50), -- 稲の色:育ちきり(黄金)
+	RiceStubbleColor = Color3.fromRGB(225, 205, 130), -- 刈り株の色(薄い黄色)
+	RiceEarColor = Color3.fromRGB(235, 200, 90), -- 穂の色
+	WaterColor = Color3.fromRGB(70, 120, 110), -- 水の色(茶色がかった青緑)
+	WaterTransparency = 0.6, -- 水面の透明度
+	WaterReflectance = 0.1, -- 水面の反射
+	WaterDepth = 0.2, -- 水の層の厚さ(ゆか上面からの高さ)
 	SpawnColor = Color3.fromRGB(160, 140, 100), -- スタート地点
+
+	-- 光と空気(仕様書 007 の 4・5。クライアントだけで変える。調整のしかたは docs/design/lighting.md)
+	ClockTimeStart = 7, -- ラウンドの始まりの時刻(朝7時)
+	ClockTimeEnd = 17.5, -- 稲刈りの日の時刻(夕方17時30分)
+	LightSmoothRate = 2, -- 光がなめらかに近づく速さ(大きいほど速い。1秒ごとの階段をならす)
+	LightResetRate = 8, -- 新しいラウンドで、朝へ戻る速さ(大きいほど速い。8で約0.5秒)
+	LightResetDropThreshold = 0.05, -- 進み具合がこれ以上下がったら「新しいラウンド」とみなす(速く戻す)
+	LightUpdateEpsilon = 0.0005, -- 進み具合の変化がこれより小さい間は、見た目を更新しない(軽くするため。0.0005 = 0.05%)
+	LightEffectWaitSeconds = 10, -- RoundState を待つ最大の時間(秒)
+	-- Lighting 本体(Brightness は明るさ。Ambient は影の部分の色、OutdoorAmbient は屋外の環境光)
+	LightBrightnessMorning = 2,
+	LightBrightnessEvening = 2.5,
+	LightAmbientMorning = Color3.fromRGB(90, 95, 105),
+	LightAmbientEvening = Color3.fromRGB(110, 80, 70),
+	LightOutdoorAmbientMorning = Color3.fromRGB(120, 125, 135),
+	LightOutdoorAmbientEvening = Color3.fromRGB(150, 105, 85),
+	-- Atmosphere(もや)。密度と Haze は、朝 → 昼(進み具合0.5)→ 夕方の3点で補間する
+	LightAtmoDensityMorning = 0.35, -- 朝は、うっすら霧(少し濃いめ)
+	LightAtmoDensityNoon = 0.2, -- 昼は晴れる
+	LightAtmoDensityEvening = 0.3, -- 夕方は、金色のもや
+	LightAtmoHazeMorning = 1.2,
+	LightAtmoHazeNoon = 0.4,
+	LightAtmoHazeEvening = 1.6,
+	LightAtmoOffsetMorning = 0.1,
+	LightAtmoOffsetEvening = 0.25,
+	LightAtmoColorMorning = Color3.fromRGB(200, 208, 218), -- 朝の霧(白っぽい青)
+	LightAtmoColorEvening = Color3.fromRGB(255, 195, 125), -- 夕方のもや(金色)
+	LightAtmoDecayMorning = Color3.fromRGB(150, 165, 185),
+	LightAtmoDecayEvening = Color3.fromRGB(255, 150, 80),
+	LightAtmoGlareMorning = 0,
+	LightAtmoGlareEvening = 0.6,
+	-- ColorCorrection(色の補正)
+	LightColorBrightnessMorning = 0,
+	LightColorBrightnessEvening = 0.02,
+	LightColorContrastMorning = 0,
+	LightColorContrastEvening = 0.1,
+	LightColorSaturationMorning = 0,
+	LightColorSaturationEvening = 0.15,
+	LightColorTintMorning = Color3.fromRGB(255, 255, 255), -- 朝は白(色をつけない)
+	LightColorTintEvening = Color3.fromRGB(255, 225, 190), -- 夕方は暖かい色
+	-- Bloom(光のにじみ)
+	LightBloomIntensityMorning = 0.2,
+	LightBloomIntensityEvening = 0.6,
+	LightBloomSizeMorning = 18,
+	LightBloomSizeEvening = 32,
+	LightBloomThresholdMorning = 1.8, -- 小さいほど、にじみやすい
+	LightBloomThresholdEvening = 1.2,
+	-- SunRays(光の筋)。強くなりすぎないようにする
+	LightSunRaysIntensityMorning = 0.03,
+	LightSunRaysIntensityEvening = 0.1,
+	LightSunRaysSpread = 0.6,
 }
 
 return Config
