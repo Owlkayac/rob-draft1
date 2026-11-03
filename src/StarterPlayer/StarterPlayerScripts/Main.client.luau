@@ -11,3 +11,7 @@ print(`[{Config.GameName}] クライアント起動`)
 local DiveController = require(script.Parent.Controllers.DiveController)
 
 DiveController.Start()
+
+local GuiController = require(script.Parent.Controllers.GuiController)
+
+GuiController.Start()
