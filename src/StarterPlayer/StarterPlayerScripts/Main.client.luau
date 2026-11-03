@@ -15,6 +15,7 @@ local CONTROLLER_NAMES = {
 	"LightingController",
 	"RiceSwayController",
 	"CrayfishAnimator",
+	"SoundController",
 }
 
 local controllersFolder = script.Parent:WaitForChild("Controllers")

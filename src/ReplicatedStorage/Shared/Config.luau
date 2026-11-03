@@ -283,6 +283,53 @@ local Config = {
 	LightSunRaysIntensityMorning = 0.03,
 	LightSunRaysIntensityEvening = 0.1,
 	LightSunRaysSpread = 0.6,
+
+	-- 効果音・環境音(仕様書 011。選び方と鳴らし方は docs/design/sound.md)
+	-- 音のID(素材の番号)。「rbxassetid://数字」の形で入れる。空("")なら、その音は作らない・鳴らさない(エラーも警告も出ない)。
+	-- 外部のURLなど、ほかの形は警告を出して無視する。入れたら assets/CREDITS.md にも記録する。
+	SoundIds = {
+		Ambient = "", -- 田んぼの環境音(ゲーム中ずっと・くり返し)
+		HarvesterEngine = "", -- 稲刈り機のエンジン音(動いている間・くり返し・3D)
+		Splash = "", -- 潜る・浮上するときの水の音
+		Eat = "", -- 餌を食べたとき(仕様書 012 でつなぐ)
+		Caught = "", -- つかまったとき
+		Clear = "", -- クリアしたとき
+	} :: { [string]: string },
+	-- 音量(0〜1)。種類ごと。ここにない種類は 0.5
+	SoundVolumes = {
+		Ambient = 0.35,
+		HarvesterEngine = 0.6,
+		Splash = 0.5,
+		Eat = 0.5,
+		Caught = 0.7,
+		Clear = 0.7,
+	} :: { [string]: number },
+	SoundHarvesterRollOffMaxDistance = 120, -- 稲刈り機の音が届く距離(これより遠いと聞こえない)
+	SoundHarvesterRollOffMinDistance = 15, -- この距離までは、音量が下がらない
+	SoundAmbientDuckVolume = 0.1, -- つかまった・クリアのとき、環境音をここまで小さくする(0〜1)
+	SoundAmbientDuckSeconds = 1.0, -- 環境音を小さくする・元に戻すのにかける時間(秒)
+	SoundWaitSeconds = 10, -- SoundController が、RoundState・ScoreState を待つ最大の時間(秒)
+
+	-- 餌・点数・ベスト記録(仕様書 012。調整のしかたは docs/design/score.md)
+	FoodCount = 10, -- 田んぼにある餌の数
+	FoodPoints = 10, -- 餌1つの点
+	FoodEatDistance = 3.5, -- 食べられる距離(横方向)
+	FoodRespawnSeconds = 6, -- 食べたあと、新しい餌が出るまでの時間(秒)
+	FoodWallMargin = 10, -- 壁から、餌を置かない距離
+	FoodMinSpacing = 8, -- 餌と餌の、最小の間隔
+	FoodSize = 1.2, -- 餌(丸)の直径
+	FoodColor = Color3.fromRGB(255, 160, 40), -- 餌の色(明るい橙色)
+	FoodHoverHeight = 2, -- 餌が、ゆか上面からういている高さ
+	FoodPlaceTries = 30, -- 餌の位置を探すときの、やり直しの回数(置けなければ間隔をゆるめる)
+	FoodEatCheckSeconds = 0.1, -- 食べたかを調べる間隔(秒)
+	ScorePerSecond = 1, -- 生き延びた1秒の点
+	ClearBonus = 100, -- クリアのボーナス点
+	BestScoreStoreName = "BestScores", -- ベスト記録の DataStore の名前(変えると、記録が新しくなる)
+	BestScoreRetries = 3, -- 読み込み・保存に失敗したときの、やり直しの回数
+	BestScoreRetryWaitSeconds = 1, -- やり直すまでの待ち時間(秒)
+	BestScoreCloseWaitSeconds = 20, -- サーバーが閉じるとき、保存を待つ最大の時間(秒)
+	BestScoreCloseWaitStepSeconds = 0.1, -- サーバーが閉じるとき、保存が終わったかを見る間隔(秒)
+	ScoreStateRemoteName = "ScoreState", -- サーバー→クライアント:点数・ベスト・ベスト更新か・食べたか
 }
 
 return Config

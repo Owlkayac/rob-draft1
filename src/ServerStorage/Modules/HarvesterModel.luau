@@ -8,6 +8,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
+local SoundUtil = require(ReplicatedStorage.Shared.SoundUtil)
 
 local HarvesterModel = {}
 
@@ -108,6 +109,25 @@ local function makeDustSource(bodyWidth: number, length: number): Part
 	return source
 end
 
+-- エンジン音(3D)を胴体に作る。ID が空・形が正しくなければ作らない(Sweep は、無ければ何もしない)。
+-- Playing=false で作り、動いている間だけ Sweep が true にする。遠いほど小さく聞こえる
+local function makeEngineSound(body: Part)
+	local soundId = SoundUtil.GetId("HarvesterEngine")
+	if soundId == nil then
+		return
+	end
+	local sound = Instance.new("Sound")
+	sound.Name = "EngineSound"
+	sound.SoundId = soundId
+	sound.Looped = true
+	sound.Volume = SoundUtil.GetVolume("HarvesterEngine")
+	sound.RollOffMode = Enum.RollOffMode.Linear
+	sound.RollOffMinDistance = Config.SoundHarvesterRollOffMinDistance
+	sound.RollOffMaxDistance = Config.SoundHarvesterRollOffMaxDistance
+	sound.Playing = false
+	sound.Parent = body
+end
+
 -- 稲刈り機のモデルを作って返す(Workspace にはまだ入れない)
 function HarvesterModel.Create(): Model
 	local width = Config.HarvesterWidth
@@ -160,6 +180,7 @@ function HarvesterModel.Create(): Model
 		makeWheel("WheelRearRight", wheelX, rearWheelZ),
 	}
 
+	makeEngineSound(body) -- エンジン音(ID が空なら作らない)
 	makeChaffSource(blade) -- 刈りくず:刃から(前と上へ)
 	local dustSource = makeDustSource(bodyWidth, length)
 

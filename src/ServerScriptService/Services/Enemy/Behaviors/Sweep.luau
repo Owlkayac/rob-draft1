@@ -25,7 +25,7 @@ type SweepState = {
 	Distance: number, -- いままで進んだ長さ
 	Segment: number, -- いま走っている区間の番号(Points[Segment] → Points[Segment + 1])
 	WaitLeft: number, -- 動き始めるまでの残り秒数
-	Emitting: boolean, -- 粒子(刈りくず・土ぼこり)を出している最中か。変わったときだけ Enabled に書く
+	Emitting: boolean, -- 粒子(刈りくず・土ぼこり)とエンジン音が出ている最中か。変わったときだけ書く
 }
 
 local states: { [Types.Context]: SweepState } = {} -- ctx ごとの記憶(Exit で消す)
@@ -65,7 +65,18 @@ local function setEmitterEnabled(model: Model, emitterName: string, enabled: boo
 	end
 end
 
--- 粒子を出す・止める。状態が変わったときだけ書く(毎フレームは書かない)
+-- エンジン音の名前(HarvesterModel でつけた名前と同じ)
+local ENGINE_SOUND_NAME = "EngineSound"
+
+-- モデルの中からエンジン音を探して、Playing を切り替える。無い(ID が空)・壊れていても、何もしない
+local function setEngineSoundPlaying(model: Model, playing: boolean)
+	local found = model:FindFirstChild(ENGINE_SOUND_NAME, true)
+	if found and found:IsA("Sound") then
+		found.Playing = playing
+	end
+end
+
+-- 粒子とエンジン音を出す・止める。状態が変わったときだけ書く(毎フレームは書かない)
 local function setEmitting(model: Model, state: SweepState, emitting: boolean)
 	if state.Emitting == emitting then
 		return
@@ -73,6 +84,7 @@ local function setEmitting(model: Model, state: SweepState, emitting: boolean)
 	state.Emitting = emitting
 	setEmitterEnabled(model, CHAFF_EMITTER_NAME, emitting)
 	setEmitterEnabled(model, DUST_EMITTER_NAME, emitting)
+	setEngineSoundPlaying(model, emitting)
 end
 
 -- Heartbeat とのつなぎを切る(何回呼んでもよい)

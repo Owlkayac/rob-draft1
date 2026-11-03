@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 local CrayfishService = require(script.Parent.CrayfishService)
 local FieldService = require(script.Parent.FieldService)
+local ScoreService = require(script.Parent.ScoreService)
 
 -- ラウンドの状態の名前
 type RoundStateName = "Playing" | "Caught" | "Cleared"
@@ -94,6 +95,10 @@ local function finishRound(player: Player, round: PlayerRound, newState: RoundSt
 		round.Remaining = calcRemaining(elapsed)
 	end
 
+	-- 点数を確定する(結果の画面に使うので、RoundState を送る前に)。クリアのときは、経過を RoundSeconds までにする
+	ScoreService.Tick(player, math.min(elapsed, Config.RoundSeconds))
+	ScoreService.EndRound(player, newState == "Cleared")
+
 	-- 先に生存を外し(潜っていたら浮上する)、そのあとで歩く速さを0にする
 	CrayfishService.SetAlive(player, false)
 	local humanoid = getHumanoid(player)
@@ -128,6 +133,7 @@ local function startRound(player: Player)
 	FieldService.ResetRice() -- 稲を最初の状態(刈り株も元に戻す)にする
 	lastRiceUpdateAt = os.clock()
 	lastRiceStage = 1
+	ScoreService.BeginRound(player) -- 点数を0に戻す(RoundState より先)
 	sendState(player, round)
 end
 
@@ -168,6 +174,7 @@ local function updateRounds()
 			else
 				round.Stage = calcStage(elapsed)
 				round.Remaining = calcRemaining(elapsed)
+				ScoreService.Tick(player, elapsed)
 				sendState(player, round)
 			end
 			-- 稲の見た目は、いちばん新しく始めた人の進み具合に合わせる

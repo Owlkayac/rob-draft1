@@ -24,6 +24,12 @@ local TEXT_HARVESTER_WARNING = "稲刈り機が動き出した!"
 local HARVESTER_WARNING_SECONDS = 4 -- 予告を出しておく時間(秒)
 local HARVESTER_WARNING_COLOR = Color3.fromRGB(255, 220, 80)
 
+-- 点数の表示(仕様書 012)
+local TEXT_SCORE = "てん: "
+local TEXT_BEST = "ベスト: "
+local TEXT_NEW_BEST = "ベスト更新!"
+local SCORE_COLOR = Color3.fromRGB(255, 210, 90)
+
 -- 文字だけの TextLabel を作る共通の関数
 local function makeLabel(name: string, size: UDim2, position: UDim2, textSize: number, parent: Instance): TextLabel
 	local label = Instance.new("TextLabel")
@@ -98,6 +104,34 @@ local function buildGui(): (TextLabel, TextLabel, Frame, TextLabel, TextButton, 
 	return timeLabel, stageLabel, overlay, messageLabel, button, warningLabel
 end
 
+-- 点数の表示を作る(左上の点数と、結果の画面の点数・ベスト)。buildGui のあとに呼ぶ
+local function buildScoreLabels(): (TextLabel?, TextLabel?)
+	local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+	local screenGui = playerGui:FindFirstChild("RoundGui")
+	if not screenGui then
+		return nil, nil
+	end
+	local scoreLabel = makeLabel("ScoreLabel", UDim2.fromOffset(220, 40), UDim2.fromOffset(10, 10), 30, screenGui)
+	scoreLabel.TextXAlignment = Enum.TextXAlignment.Left
+	scoreLabel.TextColor3 = SCORE_COLOR
+	scoreLabel.Visible = false
+
+	local overlay = screenGui:FindFirstChild("ResultPanel")
+	if not overlay then
+		return scoreLabel, nil
+	end
+	local resultLabel = makeLabel("ScoreResultLabel", UDim2.new(1, 0, 0.14, 0), UDim2.new(0, 0, 0.45, 0), 26, overlay)
+	resultLabel.TextColor3 = SCORE_COLOR
+	resultLabel.TextWrapped = true -- 長い数字でも、パネルからはみ出さず、折り返す
+	return scoreLabel, resultLabel
+end
+
+-- 結果の画面の「てん: 123 / ベスト: 200」の文字
+local function formatResult(score: number, best: number, newBest: boolean): string
+	local bestText = if newBest then TEXT_NEW_BEST else TEXT_BEST .. tostring(best)
+	return TEXT_SCORE .. tostring(score) .. " / " .. bestText
+end
+
 -- 秒を「分:秒」の文字にする
 local function formatTime(seconds: number): string
 	local total = math.max(0, math.floor(seconds))
@@ -141,6 +175,40 @@ function GuiController.Start()
 	local harvesterStageName = Config.StageNames[Config.HarvesterActiveStage] -- 出穂の段階の名前
 	local warned = false -- このラウンドで、予告を出したか
 
+	-- 点数(仕様書 012)。ScoreState が見つからなくても、ほかの画面は動かす
+	local scoreLabel, resultLabel = buildScoreLabels()
+	local latestScore = 0
+	local latestBest = 0
+	local latestNewBest = false
+	local currentState = "Playing"
+
+	local function refreshScore()
+		if scoreLabel then
+			scoreLabel.Text = TEXT_SCORE .. tostring(latestScore)
+			scoreLabel.Visible = (currentState == "Playing")
+		end
+		if resultLabel then
+			resultLabel.Text = formatResult(latestScore, latestBest, latestNewBest)
+		end
+	end
+
+	task.spawn(function()
+		local found = ReplicatedStorage:WaitForChild(Config.ScoreStateRemoteName, REMOTE_WAIT_SECONDS)
+		if not found or not found:IsA("RemoteEvent") then
+			warn(`[GuiController] {Config.ScoreStateRemoteName} が見つかりません。点数は表示されません。`)
+			return
+		end
+		found.OnClientEvent:Connect(function(score: unknown, best: unknown, newBest: unknown, _eaten: unknown)
+			if typeof(score) ~= "number" or typeof(best) ~= "number" or typeof(newBest) ~= "boolean" then
+				return
+			end
+			latestScore = score
+			latestBest = best
+			latestNewBest = newBest
+			refreshScore()
+		end)
+	end)
+
 	button.Activated:Connect(function()
 		restartRemote:FireServer() -- お願いを送るだけ。やり直すかはサーバーが決める
 	end)
@@ -149,6 +217,8 @@ function GuiController.Start()
 		if typeof(state) ~= "string" or typeof(stageName) ~= "string" or typeof(remaining) ~= "number" then
 			return
 		end
+		currentState = state
+		refreshScore() -- 点数の表示を、状態に合わせる(Playing 中だけ左上に出す)
 		timeLabel.Text = formatTime(remaining)
 		stageLabel.Text = stageName
 		-- 段階の名前が「出穂」に変わったとき、1ラウンドに1回だけ予告を出す。別の段階に戻れば(新しいラウンド)また出せる。

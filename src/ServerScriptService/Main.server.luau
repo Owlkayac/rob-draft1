@@ -15,7 +15,11 @@ CrayfishService.Start()
 local FieldService = require(script.Parent.Services.FieldService)
 local RoundService = require(script.Parent.Services.RoundService)
 local EnemyService = require(script.Parent.Services.EnemyService)
+local ScoreService = require(script.Parent.Services.ScoreService)
+local FoodService = require(script.Parent.Services.FoodService)
 
 FieldService.Build() -- 田んぼ(ゆか・あぜ・稲・スタート地点)を作る
+ScoreService.Start() -- 点数とベスト記録を始める(RoundService より先)
 RoundService.Start() -- ラウンドの進行を始める
 EnemyService.Start() -- 天敵「農家さん」を出して、見回りを始める
+FoodService.Start() -- 餌を置いて、食べる判定を始める
