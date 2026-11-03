@@ -21,6 +21,21 @@ local Config = {
 	CrayfishBodyHeight = 1.6, -- 高さの目安(スタッド)
 	CrayfishGroundOffset = 0, -- 地面の高さの調整値(0 で計算どおり。プラスで上、マイナスで下)
 
+	-- ザリガニの足の動き(仕様書 010)。クライアントだけで動かす。動きが大きい・小さいときは、ここの数字を調整する
+	CrayfishLegSwingDeg = 28, -- 足のふりの大きさ(度)
+	CrayfishLegCyclesPerStud = 0.35, -- 1スタッド歩くときの、足の動きの回数(0.35 は、約2.9スタッドで足が1往復)
+	CrayfishLegPhaseStep = math.pi, -- 同じ側の、隣の足との位相のずれ(ラジアン。pi で互い違い)
+	CrayfishClawBobDeg = 6, -- 歩くときの、はさみの上下の大きさ(度)
+	CrayfishClawBobPerCycle = 2, -- 足の1周期のあいだに、はさみが上下する回数。整数にする(小数だと、位相が一周するところで動きが飛ぶ)
+	CrayfishIdleBreathSeconds = 2.4, -- 止まっているときの、ゆっくりした動き(呼吸)の周期(秒)。0 にしない(0 で割るため)
+	CrayfishIdleClawDeg = 3, -- 止まっているときの、はさみのゆれの大きさ(度)
+	CrayfishAntennaWagDeg = 10, -- 止まっているときの、ひげのふるえの大きさ(度)
+	CrayfishAntennaWagHz = 6, -- ひげのふるえの速さ(1秒あたりの回数)
+	CrayfishAntennaWagGapSeconds = 3.5, -- ひげがふるえる間隔(秒。この間隔ごとに少しふるえる)。0 にしない(0 で割るため)
+	CrayfishAntennaTrailDeg = 12, -- 歩くときに、ひげが後ろ(下向き)にたなびく角度(度)
+	CrayfishMoveMinSpeed = 0.5, -- この速さ(スタッド/秒)より遅いときは、止まっているとみなす
+	CrayfishAnimBlendPerSecond = 8, -- 歩く・止まるの切り替えのなめらかさ(大きいほど素早く切り替わる)
+
 	-- 田んぼの舞台(仕様書 004)。数字は仮の初期値。
 	FieldSize = 120, -- 田んぼの一辺の長さ
 	FieldWallHeight = 8, -- あぜ(壁)の高さ
@@ -94,6 +109,60 @@ local Config = {
 	HarvesterCabinLength = 6, -- 運転席の前後の長さ
 	HarvesterCabinWidthRatio = 0.6, -- 運転席の幅(胴体の幅に対する割合)
 
+	-- 粒子の演出(仕様書 009)。粒子の画像は Roblox の既定のまま。重いときは Rate(1秒に出す数)を下げる。調整のしかたは docs/design/particles.md
+	-- 稲刈り機の刈りくず(刃から、前と上に飛ぶ。動いている間だけ)
+	HarvesterChaffRate = 30, -- 1秒に出す数
+	HarvesterChaffLifetimeMin = 0.6, -- 寿命の最小(秒)
+	HarvesterChaffLifetimeMax = 1.0, -- 寿命の最大(秒)
+	HarvesterChaffSpeedMin = 10, -- 飛び出す速さの最小
+	HarvesterChaffSpeedMax = 18, -- 飛び出す速さの最大
+	HarvesterChaffSizeStart = 0.5, -- 出たときの大きさ(だんだん小さくなる)
+	HarvesterChaffSizeEnd = 0.3, -- 消える直前の大きさ(仕様書 009 の 0.3〜0.5 の範囲)
+	HarvesterChaffColorStart = Color3.fromRGB(110, 190, 70), -- 出たときの色(緑)
+	HarvesterChaffColorEnd = Color3.fromRGB(235, 190, 50), -- 消える直前の色(黄金)
+	HarvesterChaffAcceleration = Vector3.new(0, -12, 0), -- 加速(世界の向き。下向きにすると重力で落ちる。強いと、すぐ床の下へ落ちるので弱めにする)
+	HarvesterChaffUpwardRatio = 0.8, -- 飛ぶ向きの上向きの強さ(前向きを 1 としたときの割合。0 で真っ直ぐ前、大きいほど上へ飛ぶ)
+	HarvesterChaffSpreadAngle = Vector2.new(35, 35), -- 広がる角度(度)
+	HarvesterChaffTransparencyStart = 0, -- 出たときの透明度
+	HarvesterChaffLightEmission = 0, -- 光り具合(0 = 光らない)
+
+	-- 稲刈り機の土ぼこり(後ろの車輪のあたりから、ふんわり。動いている間だけ)
+	HarvesterDustRate = 8, -- 1秒に出す数(少なめ)
+	HarvesterDustLifetimeMin = 1.0, -- 寿命の最小(秒)
+	HarvesterDustLifetimeMax = 1.6, -- 寿命の最大(秒)
+	HarvesterDustSpeedMin = 2, -- 飛び出す速さの最小
+	HarvesterDustSpeedMax = 5, -- 飛び出す速さの最大
+	HarvesterDustSizeStart = 3, -- 出たときの大きさ(だんだん大きくなる)
+	HarvesterDustSizeEnd = 7, -- 消える直前の大きさ
+	HarvesterDustColor = Color3.fromRGB(190, 160, 120), -- 色(薄い茶色)
+	HarvesterDustTransparencyStart = 0.6, -- 出たときの透明度(消える直前は 1)
+	HarvesterDustAcceleration = Vector3.new(0, 1.5, 0), -- 加速(少し上へふんわり)
+	HarvesterDustSpreadAngle = Vector2.new(50, 50), -- 広がる角度(度)
+	HarvesterDustDrag = 1, -- 空気の抵抗(大きいほど早く止まる)
+	HarvesterDustLightEmission = 0, -- 光り具合
+	HarvesterDustSourceHeight = 0.5, -- 土ぼこりの発生源(見えない箱)の高さ
+	HarvesterDustSourceLength = 2, -- 土ぼこりの発生源の前後の長さ
+
+	-- 粒子の回転(刈りくず・土ぼこり共通の見た目の調整)
+	HarvesterParticleRotationMaxDeg = 360, -- 粒子の最初の向き(0〜この値の度)
+	HarvesterChaffRotSpeedDeg = 180, -- 刈りくずの回る速さ(度/秒。±この値)
+	HarvesterDustRotSpeedDeg = 30, -- 土ぼこりの回る速さ(度/秒。±この値)
+
+	-- ザリガニの水しぶき(潜る・浮上するとき。SplashBurstSeconds の間だけ出す)
+	SplashBurstSeconds = 0.25, -- 出し続ける時間(秒)
+	SplashRate = 80, -- 1秒に出す数(0.25秒で約20個)
+	SplashLifetimeMin = 0.4, -- 寿命の最小(秒)
+	SplashLifetimeMax = 0.7, -- 寿命の最大(秒)
+	SplashSpeedMin = 8, -- 飛び出す速さの最小
+	SplashSpeedMax = 14, -- 飛び出す速さの最大
+	SplashSizeStart = 0.6, -- 出たときの大きさ(だんだん小さくなる)
+	SplashSizeEnd = 0.1, -- 消える直前の大きさ
+	SplashColor = Color3.fromRGB(190, 225, 255), -- 色(青白い)
+	SplashTransparencyStart = 0.1, -- 出たときの透明度
+	SplashAcceleration = Vector3.new(0, -40, 0), -- 加速(下向きで、しぶきが落ちる)
+	SplashSpreadAngle = Vector2.new(70, 70), -- 広がる角度(度)
+	SplashLightEmission = 0.3, -- 光り具合(少し明るく)
+
 	-- 農家さんの見た目(外部素材は使わず、色と図形だけ)
 	FarmerSkinColor = Color3.fromRGB(224, 172, 105), -- 肌
 	FarmerClothesColor = Color3.fromRGB(60, 90, 150), -- 作業着(藍色)
@@ -134,6 +203,21 @@ local Config = {
 	RiceBladeLengthFactorMin = 0.75, -- 葉ごとの長さの割合の最小
 	RiceBladeLengthFactorMax = 1.0, -- 葉ごとの長さの割合の最大
 	RiceColorMidProgress = 0.5, -- 稲の色が「黄緑」になる育ち具合(0〜1)。ここまでが 緑 → 黄緑、ここから 黄緑 → 黄金
+
+	-- 風で稲がゆれる(仕様書 008。クライアントだけで動かす。調整のしかたは docs/design/rice-sway.md)
+	RiceSwayRadius = 40, -- ゆらす範囲(自分のキャラクターからの距離。重いときは小さく)
+	RiceSwayHz = 20, -- 1秒の更新回数(重いときは下げる)。0 にしない(0 で割るため)
+	RiceSwayMaxDeg = 6, -- 傾きの最大(度)
+	RiceSwayPeriodSeconds = 3.2, -- 1回のゆれの周期(秒)。0 にしない(0 で割るため)
+	RiceWindDirectionDeg = 20, -- 風の基本の向き(度。0 = 南(+Z)の向きへ吹く、90 = 東(+X)の向きへ吹く)
+	RiceWindWaveLength = 30, -- 波の長さ(この距離ごとに、ゆれの位相が1周する)。0 にしない(0 で割るため)
+	RiceWindGustPeriodSeconds = 11, -- 強風の強弱の周期(秒)。0 にしない(0 で割るため)
+	RiceWindGustMin = 0.4, -- 風がいちばん弱いときの強さの割合(0〜1)
+	RiceWindGustMax = 1.0, -- 風がいちばん強いときの強さの割合(0〜1)
+	RiceWindDirWobbleDeg = 5, -- 風の向きのふらつきの大きさ(度。±この値)
+	RiceWindDirWobblePeriodSeconds = 23, -- 風の向きのふらつきの周期(秒)。0 にしない(0 で割るため)
+	RiceSwayRebaseDistance = 0.02, -- 部品の位置がこれより動いていたら、サーバーが変えたとみなす(スタッド)
+	RiceSwayRebaseDot = 0.9999, -- 部品の向きの内積がこれより小さければ、サーバーが変えたとみなす(1 = 同じ向き)
 
 	-- 田んぼの色と水
 	FieldColor = Color3.fromRGB(94, 70, 48), -- 泥の茶色

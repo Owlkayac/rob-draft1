@@ -25,6 +25,7 @@ type SweepState = {
 	Distance: number, -- いままで進んだ長さ
 	Segment: number, -- いま走っている区間の番号(Points[Segment] → Points[Segment + 1])
 	WaitLeft: number, -- 動き始めるまでの残り秒数
+	Emitting: boolean, -- 粒子(刈りくず・土ぼこり)を出している最中か。変わったときだけ Enabled に書く
 }
 
 local states: { [Types.Context]: SweepState } = {} -- ctx ごとの記憶(Exit で消す)
@@ -52,6 +53,28 @@ local function advanceSegment(state: SweepState)
 	end
 end
 
+-- 粒子の名前(HarvesterModel でつけた名前と同じ)
+local CHAFF_EMITTER_NAME = "ChaffEmitter"
+local DUST_EMITTER_NAME = "DustEmitter"
+
+-- モデルの中から粒子を探して、Enabled を切り替える。見つからない・壊れていても、何もしない(エラーにしない)
+local function setEmitterEnabled(model: Model, emitterName: string, enabled: boolean)
+	local found = model:FindFirstChild(emitterName, true)
+	if found and found:IsA("ParticleEmitter") then
+		found.Enabled = enabled
+	end
+end
+
+-- 粒子を出す・止める。状態が変わったときだけ書く(毎フレームは書かない)
+local function setEmitting(model: Model, state: SweepState, emitting: boolean)
+	if state.Emitting == emitting then
+		return
+	end
+	state.Emitting = emitting
+	setEmitterEnabled(model, CHAFF_EMITTER_NAME, emitting)
+	setEmitterEnabled(model, DUST_EMITTER_NAME, emitting)
+end
+
 -- Heartbeat とのつなぎを切る(何回呼んでもよい)
 local function disconnect(state: SweepState)
 	local connection = state.Connection
@@ -63,6 +86,7 @@ end
 
 -- 最後まで進んだ:その場に置き、つなぎを切って、「終わった」印を立てる
 local function finish(ctx: Types.Context, state: SweepState)
+	setEmitting(ctx.Model, state, false)
 	disconnect(state)
 	ctx.Finished = true
 end
@@ -77,6 +101,7 @@ local function step(ctx: Types.Context, state: SweepState, frameSeconds: number)
 		state.WaitLeft -= dt -- 入ってくる前の待ち(モデルは入り口で止めておく)
 		return
 	end
+	setEmitting(ctx.Model, state, true) -- 実際に進んでいる間だけ粒子を出す
 	local speed = Stats.Get(ctx.Definition, "Speed", nil)
 	state.Distance = math.min(state.Distance + dt * speed, state.Total)
 	advanceSegment(state)
@@ -108,6 +133,7 @@ local function enter(ctx: Types.Context)
 		Distance = 0,
 		Segment = 1,
 		WaitLeft = Config.HarvesterEntryDelaySeconds,
+		Emitting = false,
 	}
 	state.Total = state.Cumulative[#points]
 	states[ctx] = state
@@ -128,6 +154,7 @@ local function exit(ctx: Types.Context)
 	local state = states[ctx]
 	states[ctx] = nil
 	if state then
+		setEmitting(ctx.Model, state, false) -- モデルが消える前に粒子を止める
 		disconnect(state)
 	end
 end

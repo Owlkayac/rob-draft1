@@ -8,14 +8,30 @@ local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Co
 
 print(`[{Config.GameName}] クライアント起動`)
 
-local DiveController = require(script.Parent.Controllers.DiveController)
+-- 起動する部品の名前(Controllers フォルダの中の ModuleScript)。この順番で起動を始める
+local CONTROLLER_NAMES = {
+	"DiveController",
+	"GuiController",
+	"LightingController",
+	"RiceSwayController",
+	"CrayfishAnimator",
+}
 
-DiveController.Start()
+local controllersFolder = script.Parent:WaitForChild("Controllers")
 
-local GuiController = require(script.Parent.Controllers.GuiController)
+-- 部品を1つ起動する。読み込みや Start() でエラーが出ても、警告を出すだけで、ほかの部品は止めない
+local function startController(name: string)
+	local ok, err = pcall(function()
+		local moduleScript = controllersFolder:WaitForChild(name) :: ModuleScript
+		local controller = require(moduleScript) :: any
+		controller.Start()
+	end)
+	if not ok then
+		warn(`[Main] {name} の起動に失敗しました: {err}`)
+	end
+end
 
-GuiController.Start()
-
-local LightingController = require(script.Parent.Controllers.LightingController)
-
-LightingController.Start()
+-- task.spawn で別々に起動する。1つが待ち(WaitForChild など)で止まっても、ほかの部品は起動する
+for _, name in CONTROLLER_NAMES do
+	task.spawn(startController, name)
+end

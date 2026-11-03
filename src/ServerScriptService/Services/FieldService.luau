@@ -1,7 +1,7 @@
 --!strict
 -- 田んぼの舞台(ゆか・水・あぜ・稲・スタート地点)をコードで作る部品。仕様書 004 の 1 と、仕様書 007 の 1〜3。
 -- 外部の素材は使わず、図形・色・Roblox に最初からある素材(Material)だけで作る。
--- 稲は「株」で作る。1株 = 葉3枚(細長い板)+ 穂2本(細い円柱)。
+-- 稲は「株」で作る。1株 = 葉3枚(細長い板)+ 穂2本(細い円柱)。株ごとに Folder に入れる(仕様書 008)。
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -27,6 +27,7 @@ type Ear = {
 type Plant = {
 	X: number, -- 株の中心の位置(ずれを含む)
 	Z: number,
+	Folder: Folder, -- この株の部品を入れる入れ物(名前 Plant_ix_iz。Attribute: Root, Cut)
 	HeightFactor: number, -- 株ごとの高さの割合(1 前後)
 	Blades: { Blade },
 	Ears: { Ear },
@@ -115,7 +116,8 @@ end
 
 -- ===== 稲 =====
 
--- 稲の部品を1つ作る。固定(Anchored)で、当たり判定・探索・接触は全部なし
+-- 稲の部品を1つ作る。固定(Anchored)で、当たり判定・探索・接触は全部なし。
+-- 名前は、入れ物(株の Folder)の中で重ならないようにする
 local function makeRicePart(name: string, material: Enum.Material, color: Color3, parent: Instance): Part
 	local part = Instance.new("Part")
 	part.Name = name
@@ -140,7 +142,7 @@ local function createBlade(index: number, baseYaw: number, random: Random, paren
 	local tilt = math.rad(random:NextNumber(Config.RiceBladeTiltMinDeg, Config.RiceBladeTiltMaxDeg))
 	local yawCFrame = CFrame.Angles(0, yaw, 0)
 	return {
-		Part = makeRicePart("Blade", MATERIAL_BLADE, Config.RiceGreenColor, parent),
+		Part = makeRicePart(`Blade{index}`, MATERIAL_BLADE, Config.RiceGreenColor, parent),
 		Rotation = yawCFrame * CFrame.Angles(tilt, 0, 0),
 		Heading = yawCFrame * Vector3.zAxis,
 		CosTilt = math.cos(tilt),
@@ -150,25 +152,34 @@ end
 
 -- 穂1本を作る(最初は透明)
 local function createEar(bladeIndex: number, parent: Instance): Ear
-	local part = makeRicePart("Ear", MATERIAL_EAR, Config.RiceEarColor, parent)
+	local part = makeRicePart(`Ear{bladeIndex}`, MATERIAL_EAR, Config.RiceEarColor, parent)
 	part.Shape = Enum.PartType.Cylinder -- 円柱。長さは Size.X の向き
 	part.Transparency = 1
 	return { Part = part, BladeIndex = bladeIndex }
 end
 
--- 株1つを作る(位置の中心 x, z。乱数 random で向きなどを決める)
-local function createPlant(x: number, z: number, random: Random, parent: Instance): Plant
+-- 株1つを作る(格子の番号 ix, iz。位置の中心 x, z。乱数 random で向きなどを決める)。
+-- 部品は、株ごとの Folder(Plant_ix_iz)に入れる。Folder の Attribute:
+--   Root(Vector3)= 株の根もと(ゆか上面の高さの点)。クライアントの風のゆれ(仕様書 008)が使う
+--   Cut(boolean)= 刈られたか。刈られた株は、ゆれない
+local function createPlant(ix: number, iz: number, x: number, z: number, random: Random, parent: Instance): Plant
+	local folder = Instance.new("Folder")
+	folder.Name = `Plant_{ix}_{iz}`
+	folder:SetAttribute("Root", Vector3.new(x, Config.FieldFloorTopY, z))
+	folder:SetAttribute("Cut", false)
 	local baseYaw = random:NextNumber(0, 2 * math.pi)
 	local blades: { Blade } = {}
 	for index = 1, Config.RiceBladeCount do
-		table.insert(blades, createBlade(index, baseYaw, random, parent))
+		table.insert(blades, createBlade(index, baseYaw, random, folder))
 	end
 	local ears: { Ear } = {}
 	for index = 1, math.min(Config.RiceEarCount, Config.RiceBladeCount) do
-		table.insert(ears, createEar(index, parent))
+		table.insert(ears, createEar(index, folder))
 	end
 	local variation = Config.RiceHeightVariation
+	folder.Parent = parent -- 部品を入れ終わってから、Rice の下に置く
 	return {
+		Folder = folder,
 		X = x,
 		Z = z,
 		HeightFactor = 1 + random:NextNumber(-variation, variation),
@@ -282,7 +293,7 @@ local function buildRice(field: Folder)
 		for iz = 1, gridCount do
 			local x = (ix - gridOffset) * spacing + random:NextNumber(-jitter, jitter)
 			local z = (iz - gridOffset) * spacing + random:NextNumber(-jitter, jitter)
-			local plant = createPlant(x, z, random, riceFolder)
+			local plant = createPlant(ix, iz, x, z, random, riceFolder)
 			column[iz] = plant
 			table.insert(allPlants, plant)
 		end
@@ -340,6 +351,7 @@ local function cutPlant(plant: Plant)
 		return
 	end
 	plant.Cut = true
+	plant.Folder:SetAttribute("Cut", true) -- 先に知らせる(クライアントは、刈られた株をゆらさない)
 	anyCut = true
 	applyPlantLook(plant, Config.RiceStubbleHeight, Config.RiceStubbleColor, 0)
 end
@@ -400,7 +412,10 @@ function FieldService.ResetRice()
 		return -- すでに最初の状態
 	end
 	for _, plant in allPlants do
-		plant.Cut = false
+		if plant.Cut then
+			plant.Cut = false
+			plant.Folder:SetAttribute("Cut", false)
+		end
 	end
 	anyCut = false
 	lastProgress = -1 -- 同じ値でも作業が飛ばされないようにする

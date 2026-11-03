@@ -25,6 +25,7 @@ local CrayfishModel = require(crayfishModelScript :: ModuleScript)
 type PlayerState = {
 	Diving: boolean, -- 潜っているか
 	DiveToken: number, -- 古いタイマーを無効にするための番号
+	SplashToken: number, -- 水しぶきの古いタイマーを無効にするための番号
 	CooldownUntil: number, -- この時刻(os.clock)まで潜れない
 	LastRequestAt: number, -- 最後に要求を受け付けた時刻(os.clock)
 	Alive: boolean, -- 生きているか(仕様書002・003であとで使う)
@@ -40,6 +41,7 @@ local function newState(): PlayerState
 	return {
 		Diving = false,
 		DiveToken = 0,
+		SplashToken = 0,
 		CooldownUntil = -math.huge,
 		LastRequestAt = -math.huge,
 		Alive = true,
@@ -92,6 +94,49 @@ local function applyDiveLook(state: PlayerState, character: Model)
 	end
 end
 
+-- キャラクターの水しぶきの粒子(CrayfishModel でつけた SplashEmitter)を探す。なければ nil
+local function findSplashEmitter(character: Model?): ParticleEmitter?
+	if not character then
+		return nil
+	end
+	local visual = character:FindFirstChild(VISUAL_FOLDER_NAME)
+	if not visual then
+		return nil
+	end
+	local found = visual:FindFirstChild("SplashEmitter", true)
+	if found and found:IsA("ParticleEmitter") then
+		return found
+	end
+	return nil
+end
+
+-- 水しぶきを止める。古いタイマーも無効にする(やり直し・生まれ直し・死亡で、true のまま残らないように)
+local function stopSplash(state: PlayerState, character: Model?)
+	state.SplashToken += 1
+	local emitter = findSplashEmitter(character)
+	if emitter then
+		emitter.Enabled = false
+	end
+end
+
+-- 水しぶきを短く出す:Enabled を true にして、Config.SplashBurstSeconds 後に false へ戻す。
+-- (サーバーで Emit() を呼んでも他の端末には見えないので、Enabled を切り替える)
+-- 続けて呼ばれたら、古いタイマーは番号で無効になり、新しいタイマーだけが止める
+local function burstSplash(state: PlayerState, character: Model?)
+	local emitter = findSplashEmitter(character)
+	if not emitter then
+		return
+	end
+	state.SplashToken += 1
+	local token = state.SplashToken
+	emitter.Enabled = true
+	task.delay(Config.SplashBurstSeconds, function()
+		if state.SplashToken == token then
+			emitter.Enabled = false -- 消えた粒子に書いても、エラーにならない
+		end
+	end)
+end
+
 -- 浮上する(クールダウン開始)
 local function surface(player: Player)
 	local state = states[player]
@@ -110,6 +155,7 @@ local function surface(player: Player)
 	if player.Character then
 		player.Character:SetAttribute("Hidden", false)
 	end
+	burstSplash(state, player.Character) -- 浮上の水しぶき
 end
 
 -- 潜る
@@ -122,6 +168,7 @@ local function dive(player: Player, state: PlayerState, character: Model, humano
 	state.OriginalTransparency = {}
 	applyDiveLook(state, character)
 	character:SetAttribute("Hidden", true)
+	burstSplash(state, character) -- 潜る水しぶき
 
 	-- 上限時間がたったら強制的に浮上する(同じ潜りのときだけ)
 	task.delay(Config.DiveMaxSeconds, function()
@@ -142,6 +189,7 @@ local function resetDiveState(player: Player)
 	state.DiveToken += 1
 	state.CooldownUntil = -math.huge
 	state.OriginalTransparency = {}
+	stopSplash(state, player.Character) -- 水しぶきも止める
 end
 
 -- クライアントからのお願いを確認して処理する
@@ -218,6 +266,8 @@ local function setupCharacter(player: Player, character: Model)
 	humanoid.WalkSpeed = Config.CrayfishWalkSpeed
 	humanoid.UseJumpPower = true
 	humanoid.JumpPower = 0 -- ジャンプ禁止
+	-- 死んだときに関節(Motor6D)が壊れて、足・はさみ・ひげがばらばらに落ちないようにする(仕様書 010)
+	humanoid.BreakJointsOnDeath = false
 	character:SetAttribute("Hidden", false)
 
 	applyLook(player, character)

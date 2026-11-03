@@ -3,6 +3,11 @@
 -- 外部の素材は使わず、図形(Part)だけで作る。
 -- 人型(Humanoid)は動きと当たり判定の土台として残し、人型の見た目は透明にして隠す。
 -- ザリガニの図形は HumanoidRootPart に溶接(WeldConstraint)して、ついて歩かせる。
+-- ただし、動かす部品(足・はさみ・ひげ。仕様書 010)は、胴体(Body)に Motor6D(関節)でつなぐ。
+--   Motor6D は「Part1 の位置 = Part0 の位置 * C0 * Transform * C1 の逆」で決まる。
+--   C0 = 胴体から見た関節の位置、C1 = 動かす部品から見た同じ関節の位置。
+--   Transform が単位(何もしない)のときは、WeldConstraint で溶接したときと同じ位置になる。
+--   Transform を回すと、関節の位置を中心に部品が回る(クライアントの CrayfishAnimator が毎フレーム回す)。
 --
 -- 向き:Part の「正面」は -Z 方向。ザリガニは Z 方向に長く、はさみと目は -Z(前)に向ける。
 -- 組み立てる時の座標(「ローカル座標」)は、足元の地面の点を原点(0,0,0)とする。
@@ -83,11 +88,12 @@ type Context = {
 	Folder: Folder, -- CrayfishVisual
 	U: number, -- 前後の単位長さ(全長 / 基準の長さ)
 	H: number, -- 高さの目安(Config.CrayfishBodyHeight)
+	Body: BasePart?, -- 胴体(Motor6D の土台。buildBody で入る)
 }
 
 type ShapeKind = "Block" | "Ball" | "Cylinder" | "Ellipsoid"
 
--- Part を1つ作って、HumanoidRootPart に溶接し、フォルダに入れる。
+-- Part を1つ作って、フォルダに入れる(つなぐのは、あとで weldParts か addMotor で行う)。
 -- Ellipsoid は「つぶした球」:箱に球のメッシュ(SpecialMesh)をつけて作る(Ball は縦横を変えにくいため)
 local function addPart(
 	ctx: Context,
@@ -118,15 +124,57 @@ local function addPart(
 	end
 	part.CFrame = ctx.Base * localCFrame
 	part.Parent = ctx.Folder
-
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = ctx.Root
-	weld.Part1 = part
-	weld.Parent = part
 	return part
 end
 
+-- 2つの部品を WeldConstraint(固定)でつなぐ。weld は part1 の子に置く
+local function weldParts(part0: BasePart, part1: BasePart)
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = part0
+	weld.Part1 = part1
+	weld.Parent = part1
+end
+
+-- 動かさない部品を作って、HumanoidRootPart に溶接する
+local function addFixedPart(
+	ctx: Context,
+	name: string,
+	kind: ShapeKind,
+	size: Vector3,
+	localCFrame: CFrame,
+	color: Color3
+): Part
+	local part = addPart(ctx, name, kind, size, localCFrame, color)
+	weldParts(ctx.Root, part)
+	return part
+end
+
+-- 部品を、胴体に Motor6D(関節)でつなぐ。jointLocal は、関節の位置(ローカル座標)。
+-- 関節の向きは、ザリガニの向き(X=右、Y=上、Z=後ろ)に合わせる。
+--   joint = 関節のワールドでの位置と向き
+--   C0 = (胴体の CFrame の逆) * joint    ... 胴体から見た関節
+--   C1 = (部品の CFrame の逆) * joint    ... 部品から見た同じ関節
+-- すると 胴体 * C0 * (C1 の逆) = 胴体 * 胴体の逆 * joint * joint の逆 * 部品 = 部品 となり、
+-- Transform が単位のときの位置は、いまの位置(溶接のとき)と同じ。
+-- 胴体がない(ありえないが)ときは、動かないよう溶接で代用する
+local function addMotor(ctx: Context, part: BasePart, motorName: string, jointLocal: Vector3)
+	local body = ctx.Body
+	if not body then
+		weldParts(ctx.Root, part)
+		return
+	end
+	local joint = ctx.Base * CFrame.new(jointLocal)
+	local motor = Instance.new("Motor6D")
+	motor.Name = motorName
+	motor.Part0 = body
+	motor.Part1 = part
+	motor.C0 = body.CFrame:Inverse() * joint
+	motor.C1 = part.CFrame:Inverse() * joint
+	motor.Parent = body -- Motor6D は Part0(胴体)の子に置く
+end
+
 -- 点 a から点 b までをつなぐ、細い円柱(足、ひげ、目の柱)を作る
+-- (つなぐのは呼んだ側。動かす部品は addMotor、動かさない部品は weldParts)
 local function addLimb(ctx: Context, name: string, a: Vector3, b: Vector3, thickness: number, color: Color3): Part
 	local offset = b - a
 	local direction = offset.Unit
@@ -137,12 +185,31 @@ local function addLimb(ctx: Context, name: string, a: Vector3, b: Vector3, thick
 	return addPart(ctx, name, "Cylinder", Vector3.new(offset.Magnitude, thickness, thickness), cframe, color)
 end
 
+-- 水しぶきの粒子(ParticleEmitter)を作る。Enabled=false で作り、潜る・浮上のときだけ CrayfishService が短く true にする。
+-- 粒子の画像(Texture)は設定しない(Roblox の既定のまま)
+local function makeSplashEmitter(): ParticleEmitter
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "SplashEmitter"
+	emitter.Enabled = false
+	emitter.Rate = Config.SplashRate
+	emitter.Lifetime = NumberRange.new(Config.SplashLifetimeMin, Config.SplashLifetimeMax)
+	emitter.Speed = NumberRange.new(Config.SplashSpeedMin, Config.SplashSpeedMax)
+	emitter.Color = ColorSequence.new(Config.SplashColor)
+	emitter.Size = NumberSequence.new(Config.SplashSizeStart, Config.SplashSizeEnd) -- だんだん小さく
+	emitter.Transparency = NumberSequence.new(Config.SplashTransparencyStart, 1) -- だんだん透明に
+	emitter.Acceleration = Config.SplashAcceleration
+	emitter.EmissionDirection = Enum.NormalId.Top
+	emitter.SpreadAngle = Config.SplashSpreadAngle
+	emitter.LightEmission = Config.SplashLightEmission
+	return emitter
+end
+
 -- 胴体とお腹の板
 local function buildBody(ctx: Context)
 	local u, h = ctx.U, ctx.H
 	local bodyHeight = h * BODY_HEIGHT_RATIO
 	local lift = h * BODY_LIFT_RATIO
-	addPart(
+	local body = addFixedPart(
 		ctx,
 		"Body",
 		"Ellipsoid",
@@ -150,8 +217,10 @@ local function buildBody(ctx: Context)
 		CFrame.new(0, lift + bodyHeight / 2, u * BODY_Z_RATIO),
 		Config.CrayfishColor
 	)
+	ctx.Body = body -- 動かす部品の Motor6D は、この胴体につなぐ
+	makeSplashEmitter().Parent = body -- 水しぶきは胴体から(Attach で作り直されても、新しい胴体につく)
 	-- お腹側:明るい色の薄い板を、胴体としっぽの下に
-	addPart(
+	addFixedPart(
 		ctx,
 		"Belly",
 		"Block",
@@ -169,7 +238,7 @@ local function buildTail(ctx: Context)
 		local width = TAIL_FIRST_WIDTH - TAIL_WIDTH_STEP * (i - 1)
 		local height = h * (TAIL_HEIGHT_RATIO - TAIL_HEIGHT_STEP_RATIO * (i - 1))
 		local z = u * (TAIL_START_Z_RATIO + TAIL_SEGMENT_PITCH_RATIO * (i - 0.5))
-		addPart(
+		addFixedPart(
 			ctx,
 			`TailSegment{i}`,
 			"Block",
@@ -180,7 +249,7 @@ local function buildTail(ctx: Context)
 	end
 	local finLength = u * FIN_LENGTH_RATIO
 	local finZ = u * (TAIL_START_Z_RATIO + TAIL_SEGMENT_PITCH_RATIO * TAIL_COUNT) + finLength / 2
-	addPart(
+	addFixedPart(
 		ctx,
 		"TailFin",
 		"Block",
@@ -196,7 +265,7 @@ local function buildClaw(ctx: Context, side: number)
 	local suffix = if side < 0 then "L" else "R"
 	local y = h * CLAW_Y_RATIO
 	local color = Config.CrayfishColor
-	addPart(
+	local arm = addPart(
 		ctx,
 		`ClawArm{suffix}`,
 		"Block",
@@ -204,7 +273,7 @@ local function buildClaw(ctx: Context, side: number)
 		CFrame.new(side * CLAW_ARM_X, y, u * CLAW_ARM_Z_RATIO),
 		color
 	)
-	addPart(
+	local palm = addPart(
 		ctx,
 		`ClawPalm{suffix}`,
 		"Ellipsoid",
@@ -212,7 +281,7 @@ local function buildClaw(ctx: Context, side: number)
 		CFrame.new(side * CLAW_SIDE_X, y, u * CLAW_PALM_Z_RATIO),
 		color
 	)
-	addPart(
+	local tip = addPart(
 		ctx,
 		`ClawTip{suffix}`,
 		"Block",
@@ -220,6 +289,12 @@ local function buildClaw(ctx: Context, side: number)
 		CFrame.new(side * CLAW_TIP_X, y, u * CLAW_TIP_Z_RATIO),
 		color
 	)
+	-- 球と先の箱は、腕に固定する(腕が動くと、いっしょに動く)
+	weldParts(arm, palm)
+	weldParts(arm, tip)
+	-- 関節は、腕の後ろ端(胴体に近い側)
+	local joint = Vector3.new(side * CLAW_ARM_X, y, u * (CLAW_ARM_Z_RATIO + CLAW_ARM_SIZE.Z / 2))
+	addMotor(ctx, arm, `Claw{suffix}`, joint)
 end
 
 -- 目(細い柱の先に黒い球)。side は左右(-1 か 1)
@@ -228,8 +303,9 @@ local function buildEye(ctx: Context, side: number)
 	local suffix = if side < 0 then "L" else "R"
 	local bottom = Vector3.new(side * EYE_X, h * EYE_STALK_BOTTOM_RATIO, u * EYE_Z_RATIO)
 	local top = Vector3.new(side * EYE_X, h - EYE_BALL_SIZE / 2, u * EYE_Z_RATIO)
-	addLimb(ctx, `EyeStalk{suffix}`, bottom, top, EYE_STALK_THICKNESS, Config.CrayfishColor)
-	addPart(
+	local stalk = addLimb(ctx, `EyeStalk{suffix}`, bottom, top, EYE_STALK_THICKNESS, Config.CrayfishColor)
+	weldParts(ctx.Root, stalk)
+	addFixedPart(
 		ctx,
 		`Eye{suffix}`,
 		"Ball",
@@ -247,7 +323,8 @@ local function buildAntenna(ctx: Context, side: number)
 	local length = u * ANTENNA_LENGTH_RATIO
 	local start = Vector3.new(side * ANTENNA_X, h * ANTENNA_START_Y_RATIO, u * ANTENNA_START_Z_RATIO)
 	local tip = start + Vector3.new(side * ANTENNA_SPREAD, math.sin(pitch) * length, -math.cos(pitch) * length)
-	addLimb(ctx, `Antenna{suffix}`, start, tip, ANTENNA_THICKNESS, Config.CrayfishBellyColor)
+	local antenna = addLimb(ctx, `Antenna{suffix}`, start, tip, ANTENNA_THICKNESS, Config.CrayfishBellyColor)
+	addMotor(ctx, antenna, `Antenna{suffix}`, start) -- 関節は、ひげの根元
 end
 
 -- 足(左右に3本ずつ)。side は左右(-1 か 1)
@@ -257,7 +334,8 @@ local function buildLegs(ctx: Context, side: number)
 	for i, zRatio in LEG_PAIRS_Z_RATIOS do
 		local root = Vector3.new(side * LEG_ROOT_X, h * LEG_ROOT_Y_RATIO, u * zRatio)
 		local tip = Vector3.new(side * LEG_TIP_X, 0, u * zRatio)
-		addLimb(ctx, `Leg{suffix}{i}`, root, tip, LEG_THICKNESS, Config.CrayfishBellyColor)
+		local leg = addLimb(ctx, `Leg{suffix}{i}`, root, tip, LEG_THICKNESS, Config.CrayfishBellyColor)
+		addMotor(ctx, leg, `Leg{suffix}{i}`, root) -- 関節は、足の付け根
 	end
 end
 
