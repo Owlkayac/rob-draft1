@@ -3,7 +3,7 @@
 -- コードの中に数字を直書きしない。
 
 local Config = {
-	GameName = "Untitled",
+	GameName = "ZARIGANI",
 
 	-- ザリガニの操作(仕様書 001)。数字は仮の初期値で、遊びながら調整する。
 	CrayfishWalkSpeed = 16, -- 歩く速さ
