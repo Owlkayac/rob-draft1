@@ -6,7 +6,20 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local ServerStorage = game:GetService("ServerStorage")
+
 local Config = require(ReplicatedStorage.Shared.Config)
+local WarnOnce = require(script.Parent.Enemy.WarnOnce)
+
+-- ザリガニの見た目を入れておくフォルダの名前(CrayfishModel と同じ名前)
+local VISUAL_FOLDER_NAME = "CrayfishVisual"
+
+-- 見た目の部品は ServerStorage/Modules にある(Rojo の対応は default.project.json)
+local modulesFolder = ServerStorage:WaitForChild("Modules", 10)
+assert(modulesFolder, "[CrayfishService] ServerStorage/Modules が見つかりません")
+local crayfishModelScript = modulesFolder:WaitForChild("CrayfishModel", 10)
+assert(crayfishModelScript, "[CrayfishService] CrayfishModel が見つかりません")
+local CrayfishModel = require(crayfishModelScript :: ModuleScript)
 
 -- プレイヤー1人ぶんの状態
 type PlayerState = {
@@ -42,10 +55,15 @@ local function getHumanoid(player: Player): Humanoid?
 	return character:FindFirstChildOfClass("Humanoid")
 end
 
--- HumanoidRootPart 以外の、体の BasePart を集める
+-- 潜るときに透明度を変える対象の BasePart を集める。
+-- CrayfishVisual があれば、その中の Part だけ(人型は隠してあるので触らない。あとから読み込まれる服・帽子にも影響しない)。
+-- CrayfishVisual がない(Attach が失敗した)ときは、潜る見た目がなくならないよう、
+-- HumanoidRootPart 以外のすべての BasePart を対象にする
 local function getBodyParts(character: Model): { BasePart }
 	local parts: { BasePart } = {}
-	for _, descendant in character:GetDescendants() do
+	local visual = character:FindFirstChild(VISUAL_FOLDER_NAME)
+	local searchRoot: Instance = if visual then visual else character
+	for _, descendant in searchRoot:GetDescendants() do
 		if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
 			table.insert(parts, descendant)
 		end
@@ -53,14 +71,25 @@ local function getBodyParts(character: Model): { BasePart }
 	return parts
 end
 
--- 元の透明度に戻す
-local function restoreTransparency(state: PlayerState)
+-- 元の透明度に戻す。消えた Part(作り直しで捨てられた古い見た目など)は飛ばす
+local function restoreTransparency(state: PlayerState, character: Model?)
 	for part, original in state.OriginalTransparency do
-		if part.Parent then
+		if part.Parent and character and part:IsDescendantOf(character) then
 			part.Transparency = original
 		end
 	end
 	state.OriginalTransparency = {}
+end
+
+-- まだ記録していない Part の透明度を記録して、潜っている見た目にする(潜る瞬間と、潜り中の作り直しで使う)
+local function applyDiveLook(state: PlayerState, character: Model)
+	for _, part in getBodyParts(character) do
+		if state.OriginalTransparency[part] == nil then
+			state.OriginalTransparency[part] = part.Transparency
+			-- もともと透明なパーツが見えてしまわないよう、濃いほうを使う
+			part.Transparency = math.max(part.Transparency, Config.DiveTransparency)
+		end
+	end
 end
 
 -- 浮上する(クールダウン開始)
@@ -77,7 +106,7 @@ local function surface(player: Player)
 	if humanoid then
 		humanoid.WalkSpeed = Config.CrayfishWalkSpeed
 	end
-	restoreTransparency(state)
+	restoreTransparency(state, player.Character)
 	if player.Character then
 		player.Character:SetAttribute("Hidden", false)
 	end
@@ -91,11 +120,7 @@ local function dive(player: Player, state: PlayerState, character: Model, humano
 
 	humanoid.WalkSpeed = 0
 	state.OriginalTransparency = {}
-	for _, part in getBodyParts(character) do
-		state.OriginalTransparency[part] = part.Transparency
-		-- もともと透明なパーツ(見えない装飾品など)が見えてしまわないよう、濃いほうを使う
-		part.Transparency = math.max(part.Transparency, Config.DiveTransparency)
-	end
+	applyDiveLook(state, character)
 	character:SetAttribute("Hidden", true)
 
 	-- 上限時間がたったら強制的に浮上する(同じ潜りのときだけ)
@@ -156,10 +181,21 @@ local function onDiveRequest(player: Player, wantDive: unknown)
 	dive(player, state, character, humanoid)
 end
 
--- 仮の見た目:体を赤くする
-local function paintBody(character: Model)
-	for _, part in getBodyParts(character) do
-		part.Color = Config.CrayfishColor
+-- ザリガニの見た目をつけて、人型の見た目を隠す(仕様書 005)。何回呼んでも安全。
+-- Attach が失敗したら、人型を隠さない(プレイヤーが見えなくなるのを防ぐ)
+local function applyLook(player: Player, character: Model)
+	if not CrayfishModel.Attach(character) then
+		WarnOnce.Warn(
+			"CrayfishAttachFailed",
+			"[CrayfishService] ザリガニの見た目をつけられなかったので、人型を見えるままにします"
+		)
+		return
+	end
+	CrayfishModel.HideAvatar(character)
+	-- 潜っている最中に見た目が作り直されたら、新しい Part も潜っている見た目にする
+	local state = states[player]
+	if state and state.Diving then
+		applyDiveLook(state, character)
 	end
 end
 
@@ -173,13 +209,18 @@ local function setupCharacter(player: Player, character: Model)
 		state.Alive = true
 	end
 
-	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	local found = character:WaitForChild("Humanoid", Config.CharacterWaitSeconds)
+	if not found or not found:IsA("Humanoid") then
+		warn("[CrayfishService] Humanoid が見つからないので、キャラクターの準備をしません")
+		return
+	end
+	local humanoid = found :: Humanoid
 	humanoid.WalkSpeed = Config.CrayfishWalkSpeed
 	humanoid.UseJumpPower = true
 	humanoid.JumpPower = 0 -- ジャンプ禁止
 	character:SetAttribute("Hidden", false)
 
-	paintBody(character)
+	applyLook(player, character)
 
 	humanoid.Died:Connect(function()
 		resetDiveState(player)
@@ -194,11 +235,11 @@ local function onPlayerAdded(player: Player)
 	player.CharacterAdded:Connect(function(character: Model)
 		setupCharacter(player, character)
 	end)
-	-- 服や髪は、あとから付くので、読み込み後にもう一度塗る。
+	-- 服や髪は、あとから付くので、読み込み後にもう一度隠す。
 	-- (接続はプレイヤーごとに1回だけ。生まれ直すたびに増やさない)
 	player.CharacterAppearanceLoaded:Connect(function(loadedCharacter: Model)
 		if player.Character == loadedCharacter then
-			paintBody(loadedCharacter)
+			applyLook(player, loadedCharacter)
 		end
 	end)
 	if player.Character then

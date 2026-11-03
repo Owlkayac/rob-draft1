@@ -34,7 +34,10 @@ end
 
 -- その場で止まる
 function Movement.Stop(ctx: Types.Context)
-	ctx.Humanoid:MoveTo(ctx.Root.Position)
+	local humanoid = ctx.Humanoid
+	if humanoid then -- Humanoid を使わない天敵(稲刈り機)では、何もしない
+		humanoid:MoveTo(ctx.Root.Position)
+	end
 end
 
 -- 経路を作り直す。待っている間に世代が変わったり壊れたりして、結果を捨てたら false
@@ -69,6 +72,10 @@ end
 
 -- 目的地へ向かって歩く。この関数は、経路を作る間、止まる(待つ)ことがある
 function Movement.WalkTo(ctx: Types.Context, destination: Vector3)
+	local humanoid = ctx.Humanoid
+	if not humanoid then
+		return -- Humanoid を使わない天敵は、歩けない
+	end
 	local move = ctx.Move
 	if os.clock() - move.LastPathAt >= Config.EnemyRepathSeconds then
 		if not refreshRoute(ctx, destination) then
@@ -85,9 +92,9 @@ function Movement.WalkTo(ctx: Types.Context, destination: Vector3)
 		move.WaypointIndex += 1
 	end
 	if move.WaypointIndex <= #waypoints then
-		ctx.Humanoid:MoveTo(waypoints[move.WaypointIndex].Position)
+		humanoid:MoveTo(waypoints[move.WaypointIndex].Position)
 	else
-		ctx.Humanoid:MoveTo(destination)
+		humanoid:MoveTo(destination)
 	end
 end
 

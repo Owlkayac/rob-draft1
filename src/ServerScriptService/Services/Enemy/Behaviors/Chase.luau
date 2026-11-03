@@ -14,7 +14,10 @@ local CrayfishService = require(script.Parent.Parent.Parent.CrayfishService)
 local function enter(ctx: Types.Context)
 	local target = ctx.Target
 	local player = if target then target.Player else nil
-	ctx.Humanoid.WalkSpeed = Stats.Get(ctx.Definition, "ChaseSpeed", player)
+	local humanoid = ctx.Humanoid
+	if humanoid then
+		humanoid.WalkSpeed = Stats.Get(ctx.Definition, "ChaseSpeed", player)
+	end
 	ctx.ChasePlayer = player
 	ctx.LastSeenPosition = if target then target.Position else nil
 	ctx.LostSightSince = nil

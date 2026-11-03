@@ -19,6 +19,11 @@ local TEXT_CAUGHT = "つかまった"
 local TEXT_CLEARED = "稲刈りの日まで生き延びた!"
 local TEXT_RESTART = "もう一度"
 
+-- 稲刈り機の予告(仕様書 006 の 5)
+local TEXT_HARVESTER_WARNING = "稲刈り機が動き出した!"
+local HARVESTER_WARNING_SECONDS = 4 -- 予告を出しておく時間(秒)
+local HARVESTER_WARNING_COLOR = Color3.fromRGB(255, 220, 80)
+
 -- 文字だけの TextLabel を作る共通の関数
 local function makeLabel(name: string, size: UDim2, position: UDim2, textSize: number, parent: Instance): TextLabel
 	local label = Instance.new("TextLabel")
@@ -36,7 +41,7 @@ local function makeLabel(name: string, size: UDim2, position: UDim2, textSize: n
 end
 
 -- 画面を作る。更新に使う部品だけを返す
-local function buildGui(): (TextLabel, TextLabel, Frame, TextLabel, TextButton)
+local function buildGui(): (TextLabel, TextLabel, Frame, TextLabel, TextButton, TextLabel)
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
@@ -82,14 +87,40 @@ local function buildGui(): (TextLabel, TextLabel, Frame, TextLabel, TextButton)
 	button.Text = TEXT_RESTART
 	button.Parent = overlay
 
+	-- 画面の上:稲刈り機の予告(ふだんは隠しておく)
+	local warningLabel = makeLabel("HarvesterWarning", UDim2.fromOffset(520, 50), UDim2.new(0.5, 0, 0, 100), 36, screenGui)
+	warningLabel.AnchorPoint = Vector2.new(0.5, 0)
+	warningLabel.TextColor3 = HARVESTER_WARNING_COLOR
+	warningLabel.Text = TEXT_HARVESTER_WARNING
+	warningLabel.Visible = false
+
 	screenGui.Parent = playerGui
-	return timeLabel, stageLabel, overlay, messageLabel, button
+	return timeLabel, stageLabel, overlay, messageLabel, button, warningLabel
 end
 
 -- 秒を「分:秒」の文字にする
 local function formatTime(seconds: number): string
 	local total = math.max(0, math.floor(seconds))
 	return string.format("%d:%02d", total // 60, total % 60)
+end
+
+-- 稲刈り機の予告を、数秒だけ出す。連続で呼ばれたら、最後の呼び出しから数える
+local warningToken = 0
+local function showHarvesterWarning(warningLabel: TextLabel)
+	warningToken += 1
+	local myToken = warningToken
+	warningLabel.Visible = true
+	task.delay(HARVESTER_WARNING_SECONDS, function()
+		if myToken == warningToken then
+			warningLabel.Visible = false
+		end
+	end)
+end
+
+-- 予告を隠す(新しいラウンドが始まったときなど)
+local function hideHarvesterWarning(warningLabel: TextLabel)
+	warningToken += 1 -- 待っている隠す処理を無効にする
+	warningLabel.Visible = false
 end
 
 function GuiController.Start()
@@ -106,7 +137,9 @@ function GuiController.Start()
 	local stateRemote = stateFound
 	local restartRemote = restartFound
 
-	local timeLabel, stageLabel, overlay, messageLabel, button = buildGui()
+	local timeLabel, stageLabel, overlay, messageLabel, button, warningLabel = buildGui()
+	local harvesterStageName = Config.StageNames[Config.HarvesterActiveStage] -- 出穂の段階の名前
+	local warned = false -- このラウンドで、予告を出したか
 
 	button.Activated:Connect(function()
 		restartRemote:FireServer() -- お願いを送るだけ。やり直すかはサーバーが決める
@@ -118,6 +151,20 @@ function GuiController.Start()
 		end
 		timeLabel.Text = formatTime(remaining)
 		stageLabel.Text = stageName
+		-- 段階の名前が「出穂」に変わったとき、1ラウンドに1回だけ予告を出す。別の段階に戻れば(新しいラウンド)また出せる。
+		-- 状態が Playing でなくなったら(捕まった・クリアした)、予告はすぐ隠す
+		if state ~= "Playing" then
+			hideHarvesterWarning(warningLabel)
+		end
+		if stageName == harvesterStageName then
+			if state == "Playing" and not warned then
+				warned = true
+				showHarvesterWarning(warningLabel)
+			end
+		else
+			warned = false
+			hideHarvesterWarning(warningLabel)
+		end
 		if state == "Caught" then
 			messageLabel.Text = TEXT_CAUGHT
 			overlay.Visible = true

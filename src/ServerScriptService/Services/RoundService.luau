@@ -124,7 +124,12 @@ local function startRound(player: Player)
 end
 
 local function onCharacterAdded(player: Player, character: Model)
-	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	local found = character:WaitForChild("Humanoid", Config.CharacterWaitSeconds)
+	if not found or not found:IsA("Humanoid") then
+		warn("[RoundService] Humanoid が見つからないので、ラウンドを始めません")
+		return
+	end
+	local humanoid = found :: Humanoid
 	if player.Character ~= character then
 		return -- 待っている間に、別のキャラクターに変わった
 	end

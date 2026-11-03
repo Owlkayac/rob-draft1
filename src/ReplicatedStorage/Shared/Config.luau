@@ -13,7 +13,13 @@ local Config = {
 
 	DiveRemoteName = "DiveRequest", -- 潜る/やめるのお願いを送る RemoteEvent の名前
 	DiveTransparency = 0.6, -- 潜っている間の透明度(0=見える、1=完全に透明)
-	CrayfishColor = Color3.fromRGB(200, 40, 30), -- ザリガニの仮の色(赤)
+	-- ザリガニの見た目(仕様書 005)。細かい寸法は CrayfishModel の中にある
+	CrayfishColor = Color3.fromRGB(200, 40, 30), -- ザリガニの体の色(赤)
+	CrayfishBellyColor = Color3.fromRGB(240, 110, 60), -- お腹・足・ひげの色(明るいオレンジ)
+	CrayfishEyeColor = Color3.fromRGB(15, 15, 15), -- 目の色(黒)
+	CrayfishBodyLength = 4.5, -- 全長の目安(スタッド)
+	CrayfishBodyHeight = 1.6, -- 高さの目安(スタッド)
+	CrayfishGroundOffset = 0, -- 地面の高さの調整値(0 で計算どおり。プラスで上、マイナスで下)
 
 	-- 田んぼの舞台(仕様書 004)。数字は仮の初期値。
 	FieldSize = 120, -- 田んぼの一辺の長さ
@@ -31,9 +37,14 @@ local Config = {
 
 	-- 稲の成長とクリア(仕様書 003)
 	RoundSeconds = 300, -- 1回の長さ(稲刈りの日までの時間・秒)
-	GrowthStageSeconds = { 75, 225 }, -- 段階2・3に切り替わる経過時間(秒)
+	-- 段階2・3に切り替わる経過時間(秒)。
+	-- 3つめ(出穂の始まり)は、稲刈り機(仕様書 006)が走り切る時間から決める:
+	--   経路の長さ ÷ HarvesterSpeed + HarvesterEntryDelaySeconds < RoundSeconds - 出穂の始まり
+	--   (約1500 ÷ 13 ≒ 117秒 + 3秒 = 120秒 < 300 - 170 = 130秒)。速さ・幅を変えたら、ここも見直す
+	GrowthStageSeconds = { 75, 170 },
 	SightMultipliers = { 1.0, 0.8, 0.6 }, -- 段階ごとの、天敵の発見距離の倍率
 	StageNames = { "田植え", "成長", "出穂", "稲刈りの日" }, -- 段階の名前
+	CharacterWaitSeconds = 10, -- キャラクターの Humanoid が現れるのを待つ最大の時間(秒)
 	RoundTickSeconds = 1, -- ラウンドの時間チェックと通知の間隔(秒)
 	RespawnBlockSeconds = 100000, -- 死んだあとの自動復活を事実上止める時間(「もう一度」で復活させる)
 
@@ -60,6 +71,30 @@ local Config = {
 	WaypointReachDistance = 3, -- 経路の途中の点に「着いた」とみなす距離(標準サイズ基準)
 	PathAgentRadius = 2, -- 経路探索で使う、体の半径(標準サイズ基準)
 	PathAgentHeight = 5, -- 経路探索で使う、体の高さ(標準サイズ基準)
+
+	-- 天敵「稲刈り機」(仕様書 006)。数字は仮の初期値で、遊びながら調整する。
+	HarvesterSpeed = 13, -- 進む速さ。ザリガニの歩く速さ16より遅い
+	HarvesterWidth = 14, -- 刈る幅(進行方向と直角の長さ)。線と線の間隔でもある
+	HarvesterLength = 18, -- 機械の長さ(進行方向)。田んぼの外から入る距離でもある
+	HarvesterHeight = 10, -- 機械の高さ(見た目のみ)
+	HarvesterEntryDelaySeconds = 3, -- 出穂の段階になってから、動き始めるまでの時間(秒)
+	HarvesterLaneMargin = 7, -- 田んぼのはしから、1本目の線(と東の最後の線)までの距離
+	-- 経路の長さ ≒ 線の数 ×(FieldSize + HarvesterLength×2)+ 線の間のずれ。いまは線9本で約1500
+	HarvesterActiveStage = 3, -- 稲刈り機の出番になる稲の段階(3 = 出穂)
+	HarvesterMaxStepSeconds = 0.25, -- 1フレームで進める時間の上限(秒)。重いときに瞬間移動しないため
+
+	-- 稲刈り機の見た目(図形だけ。外部素材は使わない)
+	HarvesterColor = Color3.fromRGB(140, 180, 60), -- 胴体の色(黄緑がかった機械の色)
+	HarvesterBladeColor = Color3.fromRGB(190, 195, 200), -- 刈り取りの刃の色(銀)
+	HarvesterCabinColor = Color3.fromRGB(90, 130, 150), -- 運転席の色
+	HarvesterWheelColor = Color3.fromRGB(40, 40, 40), -- 車輪の色
+	HarvesterBladeLength = 3, -- 刃の前後の長さ
+	HarvesterBladeHeight = 3, -- 刃の高さ
+	HarvesterBodyHeight = 4, -- 胴体の高さ
+	HarvesterWheelDiameter = 4, -- 車輪の直径
+	HarvesterWheelThickness = 2.5, -- 車輪の厚さ
+	HarvesterCabinLength = 6, -- 運転席の前後の長さ
+	HarvesterCabinWidthRatio = 0.6, -- 運転席の幅(胴体の幅に対する割合)
 
 	-- 農家さんの見た目(外部素材は使わず、色と図形だけ)
 	FarmerSkinColor = Color3.fromRGB(224, 172, 105), -- 肌

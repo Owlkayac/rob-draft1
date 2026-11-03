@@ -6,7 +6,8 @@
 
 -- 数字の表。名前(文字)→ 数字。
 -- 数字の名前の例: WalkSpeed, ChaseSpeed, SightDistance, CatchDistance, CatchHiddenDistance,
--- PatrolArriveDistance, WaypointReachDistance, AgentRadius, AgentHeight, LoseSightSeconds, SearchSeconds
+-- PatrolArriveDistance, WaypointReachDistance, AgentRadius, AgentHeight, LoseSightSeconds, SearchSeconds,
+-- Speed(稲刈り機の進む速さ)
 export type StatTable = { [string]: number }
 
 -- 見える相手1人ぶんの情報
@@ -50,20 +51,29 @@ export type Definition = {
 	BaseStats: StatTable, -- 基本の数字
 	Behaviors: { [string]: Behavior }, -- 使う行動の一覧(名前 → 行動)
 	InitialBehavior: string, -- 最初の行動の名前(捕まえたあとに戻る行動でもある)
+
+	-- ここから下は「任意」。書かない天敵(農家さん)は、いままでどおりの動きになる
+	IsActive: (() -> boolean)?, -- 「いま、出番か」。ない天敵は常に出番。出番でない間は、モデルを置かず、判断もしない
+	CheckCatch: ((ctx: Context, player: Player, root: BasePart) -> boolean)?, -- 捕まえる判定を自分で決める。ない天敵は距離の判定(Perception)
+	ResetOnCatch: boolean?, -- 捕まえたあと、最初の行動に戻すか。nil か true なら戻す。false なら、そのまま続ける(機械向け)
+	FindBody: ((model: Model) -> (Humanoid?, BasePart?))?, -- 体の部品を探す。Humanoid を使わない天敵用(root が nil なら作成失敗)。ない天敵は人型を探す
+	IsModelUsable: ((ctx: Context) -> boolean)?, -- モデルがまだ使えるか。Humanoid を使わない天敵用。ない天敵は人型の確認
+	SkipScan: boolean?, -- true なら、毎回の「見回し」(Perception.Scan)をしない。見ない天敵向け
 }
 
 -- 天敵1体の「実行時の状態」(コンテキスト)。行動の関数に渡される
 export type Context = {
 	Definition: Definition,
 	Model: Model,
-	Humanoid: Humanoid,
-	Root: BasePart,
+	Humanoid: Humanoid?, -- 人型でない天敵(稲刈り機)では nil
+	Root: BasePart, -- 位置の基準になる部品(人型なら HumanoidRootPart、そうでなければ PrimaryPart)
 	SpawnPoint: Vector3, -- 出現した横位置(やり直しで戻す場所。高さは Definition.PlaceAt が決める)
 	PatrolPoints: { Vector3 }, -- 見回り地点の一覧
 	PatrolIndex: number, -- 次に向かう見回り地点の番号
 	BehaviorName: string, -- いまの行動の名前
 	SwitchCount: number, -- 行動を切り替えた回数(待っている間に切り替わったかの確認用)
 	LastTickAt: number, -- 前回の判断の時刻(os.clock)
+	Finished: boolean, -- 行動が「終わった」印。立てると、EnemyService が天敵を消す(稲刈り機が田んぼを出たとき)
 
 	-- 今回の判断で見えたもの(Perception.Scan が毎回入れる)
 	Target: Target?, -- いちばん近い「見える相手」

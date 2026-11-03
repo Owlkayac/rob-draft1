@@ -17,11 +17,18 @@ function Perception.FlatDistance(a: Vector3, b: Vector3): number
 end
 local flatDistance = Perception.FlatDistance
 
--- 天敵の体がまだ使えるか(壊れた・倒れた・いなくなったら false)
+-- 天敵の体がまだ使えるか(壊れた・倒れた・いなくなったら false)。
+-- 定義が IsModelUsable を持っていれば(Humanoid を使わない天敵)、それで確かめる
 function Perception.IsUsable(ctx: Types.Context): boolean
-	return ctx.Model.Parent ~= nil
-		and ctx.Humanoid.Parent ~= nil
-		and ctx.Humanoid.Health > 0
+	local custom = ctx.Definition.IsModelUsable
+	if custom then
+		return custom(ctx)
+	end
+	local humanoid = ctx.Humanoid
+	return humanoid ~= nil
+		and ctx.Model.Parent ~= nil
+		and humanoid.Parent ~= nil
+		and humanoid.Health > 0
 		and ctx.Root.Parent ~= nil
 end
 
@@ -74,18 +81,25 @@ function Perception.Scan(ctx: Types.Context)
 	ctx.AnyPlaying = anyPlaying
 end
 
--- 捕まえる判定。遊んでいて生きているプレイヤーそれぞれについて、横方向の距離を測り、
--- 潜っていなければ CatchDistance 以下、潜っていれば CatchHiddenDistance 以下で捕まえる。
+-- 距離での捕まえる判定(既定)。横方向の距離を測り、
+-- 潜っていなければ CatchDistance 以下、潜っていれば CatchHiddenDistance 以下なら true
+local function isCaughtByDistance(ctx: Types.Context, player: Player, root: BasePart): boolean
+	local statName = if CrayfishService.IsHidden(player) then "CatchHiddenDistance" else "CatchDistance"
+	local limit = Stats.Get(ctx.Definition, statName, player)
+	return flatDistance(ctx.Root.Position, root.Position) <= limit
+end
+
+-- 捕まえる判定。遊んでいて生きているプレイヤーそれぞれについて調べる。
+-- 定義が CheckCatch を持っていれば(稲刈り機など)それで、なければ距離の判定で決める。
 -- 1人でも捕まえたら true
 function Perception.CheckCatch(ctx: Types.Context): boolean
 	local caughtAny = false
-	local from = ctx.Root.Position
+	local custom = ctx.Definition.CheckCatch
 	for _, player in Players:GetPlayers() do
 		local root = getPlayingRoot(player)
 		if root then
-			local statName = if CrayfishService.IsHidden(player) then "CatchHiddenDistance" else "CatchDistance"
-			local limit = Stats.Get(ctx.Definition, statName, player)
-			if flatDistance(from, root.Position) <= limit then
+			local caught = if custom then custom(ctx, player, root) else isCaughtByDistance(ctx, player, root)
+			if caught then
 				RoundService.NotifyCaught(player)
 				caughtAny = true
 			end

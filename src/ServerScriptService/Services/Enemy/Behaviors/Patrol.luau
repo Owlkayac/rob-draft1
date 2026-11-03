@@ -22,7 +22,10 @@ local function nearestPatrolIndex(ctx: Types.Context): number
 end
 
 local function enter(ctx: Types.Context)
-	ctx.Humanoid.WalkSpeed = Stats.Get(ctx.Definition, "WalkSpeed", nil)
+	local humanoid = ctx.Humanoid
+	if humanoid then
+		humanoid.WalkSpeed = Stats.Get(ctx.Definition, "WalkSpeed", nil)
+	end
 	ctx.ChasePlayer = nil
 	ctx.LastSeenPosition = nil
 	ctx.LostSightSince = nil

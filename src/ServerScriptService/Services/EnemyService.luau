@@ -16,11 +16,13 @@ local Perception = require(script.Parent.Enemy.Perception)
 local WarnOnce = require(script.Parent.Enemy.WarnOnce)
 local Movement = require(script.Parent.Enemy.Movement)
 local Farmer = require(script.Parent.Enemy.Definitions.Farmer)
+local Harvester = require(script.Parent.Enemy.Definitions.Harvester)
 
 -- ===== 天敵の種類の一覧 =====
 -- 新しい種類(サギなど)は、Enemy/Definitions にファイルを作って、ここに足すだけ。
 local definitions: { Types.Definition } = {
 	Farmer,
+	Harvester, -- 出番(IsActive)になるまで作らない
 }
 
 -- 天敵1体ぶんの「置き場」。作り直しても、置き場は同じものを使う
@@ -29,6 +31,8 @@ type Slot = {
 	SpawnIndex: number, -- 出現位置にした見回り地点の番号
 	Ctx: Types.Context?, -- いまの天敵の状態(まだ作れていなければ nil)
 	Spawning: boolean, -- 作っている最中か(二重に作らないための印)
+	Epoch: number, -- 消すたびに増やす番号。作っている間に消されたら、番号が変わるので、作るのをやめる
+	Finished: boolean, -- 出番の途中で、動きが最後まで終わった印(IsActive がある種類用。出番が終わるまで作り直さない)
 }
 
 local EnemyService = {}
@@ -100,7 +104,7 @@ end
 local function newContext(
 	definition: Types.Definition,
 	model: Model,
-	humanoid: Humanoid,
+	humanoid: Humanoid?,
 	root: BasePart,
 	spawnPoint: Vector3
 ): Types.Context
@@ -115,6 +119,7 @@ local function newContext(
 		BehaviorName = "",
 		SwitchCount = 0,
 		LastTickAt = os.clock(),
+		Finished = false,
 		Target = nil,
 		AnyPlaying = false,
 		ChasePlayer = nil,
@@ -125,21 +130,55 @@ local function newContext(
 	}
 end
 
+-- 天敵1体を片づける:いまの行動の Exit(接続やタイマーの片づけ)→経路の記憶を捨てる→モデルを消す
+local function destroyContext(ctx: Types.Context)
+	local behavior = ctx.Definition.Behaviors[ctx.BehaviorName]
+	if behavior then
+		local ok, err = pcall(behavior.Exit, ctx)
+		if not ok then
+			WarnOnce.Warn(`exit:{ctx.Definition.Name}:{tostring(err)}`, `[EnemyService] 行動の Exit でエラー: {err}`)
+		end
+	end
+	Movement.Clear(ctx) -- 計算中の古い経路の結果を捨てさせる
+	ctx.Model:Destroy()
+end
+
 -- 古い天敵が残っていたら片づける
 local function removeOld(slot: Slot)
 	local old = slot.Ctx
 	slot.Ctx = nil
 	if old then
-		Movement.Clear(old) -- 計算中の古い経路の結果を捨てさせる
-		old.Model:Destroy()
+		destroyContext(old)
 	end
 end
 
+-- 出番が終わった天敵を消す(IsActive がある種類用)。作っている最中なら、作るのをやめさせる
+local function despawn(slot: Slot)
+	slot.Epoch += 1
+	removeOld(slot)
+end
+
+-- 体の部品を探す。定義が FindBody を持っていればそれで(Humanoid なしでもよい)、なければ人型を探す。
+-- root が nil なら、作れていない
+local function findBody(definition: Types.Definition, model: Model): (Humanoid?, BasePart?)
+	local custom = definition.FindBody
+	if custom then
+		return custom(model)
+	end
+	return Perception.FindBody(model)
+end
+
 -- 天敵を作って、置き場に入れる。失敗したら error を投げる(呼ぶ側が pcall で包む)。
+-- 作っている間に消されたら(番号が変わったら)、作ったモデルを捨てて false を返す。
 -- 人型の作成は待ちが入る
-local function buildEnemy(slot: Slot)
+local function buildEnemy(slot: Slot): boolean
 	local definition = slot.Definition
+	local epoch = slot.Epoch
 	local model = definition.Create()
+	if slot.Epoch ~= epoch then
+		model:Destroy()
+		return false
+	end
 	removeOld(slot)
 
 	local point = patrolPoints[slot.SpawnIndex]
@@ -147,19 +186,24 @@ local function buildEnemy(slot: Slot)
 	model.Parent = getEnemiesFolder()
 	definition.OnPlaced(model) -- Workspace に入れたあとで、動きの計算をサーバーにする、など
 	task.wait() -- 1フレーム待ってから、Workspace に入った状態の足元の高さで、もう一度補正する
+	if slot.Epoch ~= epoch then
+		model:Destroy()
+		return false
+	end
 	if model.Parent == nil then
 		error("待っている間にモデルが消えました")
 	end
 	definition.PlaceAt(model, point)
 
-	local humanoid, root = Perception.FindBody(model)
-	if not humanoid or not root then
+	local humanoid, root = findBody(definition, model)
+	if not root then
 		model:Destroy()
-		error("体の部品(Humanoid / HumanoidRootPart)が足りません")
+		error("体の部品(HumanoidRootPart など)が足りません")
 	end
 	local ctx = newContext(definition, model, humanoid, root, point)
 	slot.Ctx = ctx
 	switchBehavior(ctx, definition.InitialBehavior)
+	return true
 end
 
 -- 天敵を作る。成功したら true。作っている最中なら何もしない
@@ -168,16 +212,17 @@ local function spawnEnemy(slot: Slot): boolean
 		return false
 	end
 	slot.Spawning = true
-	local ok, err = pcall(buildEnemy, slot)
+	local ok, result = pcall(buildEnemy, slot)
 	slot.Spawning = false
 	if not ok then
+		local err = result
 		WarnOnce.Warn(
 			`spawn:{slot.Definition.Name}:{tostring(err)}`,
 			`[EnemyService] {slot.Definition.Name} を作れませんでした: {err}`
 		)
 		return false
 	end
-	return true
+	return result == true
 end
 
 -- ===== 判断のループ =====
@@ -194,12 +239,17 @@ local function tickEnemy(slot: Slot, ctx: Types.Context): boolean
 
 	-- どの行動の最中でも、近すぎる相手は捕まえる(潜っていても、ごく近くなら捕まる)
 	if Perception.CheckCatch(ctx) then
-		Movement.Stop(ctx)
-		switchBehavior(ctx, ctx.Definition.InitialBehavior) -- 捕まえたら見回りに戻る
+		-- 捕まえたら最初の行動(見回り)に戻る。ただし、戻さない定義(稲刈り機)は、そのまま続ける
+		if ctx.Definition.ResetOnCatch ~= false then
+			Movement.Stop(ctx)
+			switchBehavior(ctx, ctx.Definition.InitialBehavior)
+		end
 		return true
 	end
 
-	Perception.Scan(ctx)
+	if not ctx.Definition.SkipScan then
+		Perception.Scan(ctx)
+	end
 	local behavior = ctx.Definition.Behaviors[ctx.BehaviorName]
 	if not behavior then
 		switchBehavior(ctx, ctx.Definition.InitialBehavior)
@@ -214,18 +264,57 @@ local function tickEnemy(slot: Slot, ctx: Types.Context): boolean
 	return true
 end
 
--- 判断1回ぶん(全員)。使える天敵が1体もいなくなったら false(ループを終える)
+-- 出番がある種類(IsActive を持つ)の、判断1回ぶん。
+-- 出番でなければ、モデルを消して(あれば)何もしない。出番なら、なければ作り、あれば動きの判断をする。
+-- 動きが最後まで終わったら、モデルを消して、出番が終わるまで作り直さない
+local function updateGatedSlot(slot: Slot, isActive: () -> boolean)
+	if not isActive() then
+		slot.Finished = false -- 次の出番では、また出られる
+		if slot.Ctx ~= nil or slot.Spawning then
+			despawn(slot)
+		end
+		return
+	end
+	if slot.Finished then
+		return
+	end
+	local ctx = slot.Ctx
+	if ctx == nil then
+		spawnEnemy(slot)
+		return
+	end
+	if not tickEnemy(slot, ctx) then
+		despawn(slot) -- 体が使えなくなった:消して、次の判断で作り直す
+		return
+	end
+	if ctx.Finished and slot.Ctx == ctx then
+		despawn(slot)
+		slot.Finished = true
+	end
+end
+
+-- 判断1回ぶん(全員)。使える天敵が1体もいなくなったら false(ループを終える)。
+-- 出番がある種類は、いまいなくても、あとで出るかもしれないので、ループを続ける
 local function think(): boolean
 	local anyUsable = false
 	for _, slot in slots do
-		local ctx = slot.Ctx
-		if ctx then
-			local ok, usable = pcall(tickEnemy, slot, ctx)
+		local isActive = slot.Definition.IsActive
+		if isActive then
+			local ok, err = pcall(updateGatedSlot, slot, isActive)
 			if not ok then
-				WarnOnce.Warn(`think:{tostring(usable)}`, `[EnemyService] 判断中にエラー: {usable}`)
-				anyUsable = true -- エラーでも、次の判断で続ける
-			elseif usable == true then
-				anyUsable = true
+				WarnOnce.Warn(`think:{tostring(err)}`, `[EnemyService] 判断中にエラー: {err}`)
+			end
+			anyUsable = true
+		else
+			local ctx = slot.Ctx
+			if ctx then
+				local ok, usable = pcall(tickEnemy, slot, ctx)
+				if not ok then
+					WarnOnce.Warn(`think:{tostring(usable)}`, `[EnemyService] 判断中にエラー: {usable}`)
+					anyUsable = true -- エラーでも、次の判断で続ける
+				elseif usable == true then
+					anyUsable = true
+				end
 			end
 		end
 	end
@@ -264,6 +353,12 @@ end
 -- 天敵が壊れている・死んでいるなら作り直す。無事なら、出現位置に戻して最初の行動に戻す。
 -- 作り直したら true
 local function restartSlot(slot: Slot): boolean
+	if slot.Definition.IsActive then
+		-- 出番がある種類(稲刈り機):モデルを消して、次の出番まで出さない
+		despawn(slot)
+		slot.Finished = false
+		return false
+	end
 	local ctx = slot.Ctx
 	if not ctx or not Perception.IsUsable(ctx) then
 		if slot.Spawning then
@@ -289,12 +384,22 @@ local function hasUsableEnemy(): boolean
 	return false
 end
 
+-- 出番がある種類が1つでもあるか(あれば、モデルがなくても、ループを動かしておく)
+local function hasGatedSlot(): boolean
+	for _, slot in slots do
+		if slot.Definition.IsActive then
+			return true
+		end
+	end
+	return false
+end
+
 -- 「もう一度」でやり直すとき(RoundService から呼ばれる)
 local function onRestart()
 	for _, slot in slots do
 		restartSlot(slot)
 	end
-	if not loopRunning and hasUsableEnemy() then
+	if not loopRunning and (hasUsableEnemy() or hasGatedSlot()) then
 		startLoop() -- ループが止まっていたら動かし直す
 	end
 end
@@ -319,6 +424,8 @@ function EnemyService.Start()
 			SpawnIndex = (firstIndex + order - 2) % #patrolPoints + 1,
 			Ctx = nil,
 			Spawning = false,
+			Epoch = 0,
+			Finished = false,
 		})
 	end
 
@@ -327,11 +434,12 @@ function EnemyService.Start()
 
 	local anySpawned = false
 	for _, slot in slots do
-		if spawnEnemy(slot) then
+		-- 出番がある種類(稲刈り機)は、ここでは作らない。出番になったら、判断のループが作る
+		if slot.Definition.IsActive == nil and spawnEnemy(slot) then
 			anySpawned = true
 		end
 	end
-	if anySpawned then
+	if anySpawned or hasGatedSlot() then
 		startLoop()
 	else
 		warn("[EnemyService] 最初の天敵を作れませんでした。「もう一度」で作り直します")

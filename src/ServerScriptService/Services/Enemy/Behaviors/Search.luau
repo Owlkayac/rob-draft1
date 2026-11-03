@@ -7,7 +7,10 @@ local Stats = require(script.Parent.Parent.Stats)
 local Movement = require(script.Parent.Parent.Movement)
 
 local function enter(ctx: Types.Context)
-	ctx.Humanoid.WalkSpeed = Stats.Get(ctx.Definition, "WalkSpeed", nil)
+	local humanoid = ctx.Humanoid
+	if humanoid then
+		humanoid.WalkSpeed = Stats.Get(ctx.Definition, "WalkSpeed", nil)
+	end
 	ctx.SearchEndAt = os.clock() + Stats.Get(ctx.Definition, "SearchSeconds", nil)
 	ctx.LostSightSince = nil
 	Movement.Clear(ctx)

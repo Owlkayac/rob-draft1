@@ -36,14 +36,18 @@ Enemy/
     Patrol.luau     見回り
     Chase.luau      追跡
     Search.luau     探す
+    Sweep.luau      刈り取り(稲刈り機の動き)
+  SweepRoute.luau   稲刈り機の通る道すじの計算
   Definitions/
     Farmer.luau     天敵の種類「農家さん」の定義
+    Harvester.luau  天敵の種類「稲刈り機」の定義
 ```
 
 読み込みの向きは、いつも一方向です(ぐるっと回って読み込む「循環 require」を作らない)。
 
 ```
 Types / WarnOnce -> Stats -> Perception -> Movement -> Behaviors -> Definitions -> EnemyService
+Config -> SweepRoute -> Sweep(Behaviors)、Harvester(Definitions)   ※ SweepRoute は Config だけを読む
 ```
 
 ## 2. 各ファイルの役割
@@ -95,7 +99,7 @@ local definitions: { Types.Definition } = {
    ファイルを別のフォルダに移したら、`script.Parent` の数を数え直すこと。
 5. Studio で確認する。出現位置は、見回り地点を順にずらして決まる。
 
-数字の名前(`BaseStats` に書くもの): `WalkSpeed`、`ChaseSpeed`、`SightDistance`、`CatchDistance`、`CatchHiddenDistance`、`PatrolArriveDistance`、`WaypointReachDistance`、`AgentRadius`、`AgentHeight`、`LoseSightSeconds`、`SearchSeconds`。
+数字の名前(`BaseStats` に書くもの): `WalkSpeed`、`ChaseSpeed`、`SightDistance`、`CatchDistance`、`CatchHiddenDistance`、`PatrolArriveDistance`、`WaypointReachDistance`、`AgentRadius`、`AgentHeight`、`LoseSightSeconds`、`SearchSeconds`、`Speed`(稲刈り機の進む速さ)。
 
 注意: 仕様書 002 の 6 に「天敵の複数種類は後で追加する」とあるので、サギを実際に足す前に、仕様書を書くこと。
 
@@ -169,7 +173,7 @@ end)
 - 補正の関数に渡る `info.Definition` は天敵の種類、`info.Player` は狙う相手(いない場合は nil)。種類や相手で、倍率を変えられる。
 - 同じ名前で登録し直すと、置き換わる。`Stats.UnregisterModifier(名前)` で外せる。
 - 補正の中でエラーが起きても、その補正は 1 倍として扱われる(ゲームは止まらない)。返り値が table でない、倍率が数字でない・0以下・NaN(数字でない値)・無限大のときも、1 倍として扱う。警告(補正の名前と理由)は、同じ内容なら 1 回だけ出る(`WarnOnce`)。
-- 速さは、行動に「切り替わった時」に読まれる(`Enter`)。追跡の途中で季節が変わっても、次に切り替わるまで速さは変わらない。毎回読みたいときは、行動の `Update` で `Humanoid.WalkSpeed` を設定し直す。
+- 農家さんの速さは、行動に「切り替わった時」に読まれる(`Enter`)。稲刈り機の `Speed` は、`Sweep` が毎フレーム読むので、すぐ反映される。追跡の途中で季節が変わっても、次に切り替わるまで速さは変わらない。毎回読みたいときは、行動の `Update` で `Humanoid.WalkSpeed` を設定し直す。
 - 発見距離と捕まえる距離は、毎回の判断で読まれるので、すぐ反映される。
 
 ## 6. Config の数字の意味と、調整のしかた
@@ -185,3 +189,49 @@ end)
 ほかの数字(`PatrolArriveDistance`、`WaypointReachDistance`、`PathAgentRadius`、`PathAgentHeight`)も、標準サイズ基準で、`FarmerScale` 倍で使われる。
 
 数字の変えかた: `Config.luau` の値を書き換えて保存し、Studio で再生し直す(ゲームの途中では反映されない。農家さんの基本の数字は、ゲームの開始時と、モデルを作るたび(作り直し)に計算される)。
+
+## 7. 「出番を決める」と「捕まえ方を変える」(稲刈り機が実際の例)
+
+農家さんはずっといて、近づくと捕まえる天敵です。仕様書 006 の**稲刈り機(Harvester)**は、2つの点が違います。
+そこで、定義(`Definition`)に、**書いても書かなくてもよい関数**を足せるようにしました。書かなければ、農家さんと同じ動きです。
+
+| 任意の項目 | 意味 | 書かないと |
+|---|---|---|
+| `IsActive` | 「いま、出番か」を返す関数 | いつも出番(最初から作る) |
+| `CheckCatch` | 捕まえる判定を、定義が決める関数 | 距離の判定(`Perception`)を使う |
+| `ResetOnCatch` | 捕まえたあと、最初の行動に戻すか(`false` で戻さない) | 戻す |
+| `FindBody` / `IsModelUsable` | Humanoid(人型の体)がない天敵のための、体の探し方・使えるかの確認 | 人型を探す・確認する |
+| `SkipScan` | `true` で、毎回の「見回し」をしない | 見回す |
+
+### 出番を決める(`IsActive`)
+- `IsActive` を書いた天敵は、**最初は作られません**。0.2秒ごとの判断のたびに `IsActive()` を呼び、`true` になったら作り(spawn)、`false` になったらモデルを消します(despawn)。出番でない間は、モデルも判断もありません。
+- `IsActive` を持つ種類は、「もう一度」で必ず消え、次の判断で出番があれば、最初から作り直される。
+- 動きが最後まで終わった行動は、`ctx.Finished = true` にします。すると `EnemyService` がモデルを消し、出番が終わるまで作り直しません(出番が終わると、次の出番でまた出られます)。
+- 稲刈り機の例:
+
+```lua
+-- Definitions/Harvester.luau(抜粋)
+local function isActive(): boolean
+	for _, player in Players:GetPlayers() do
+		-- 遊んでいて、稲の段階が「出穂」(Config.HarvesterActiveStage)の人がいれば、出番
+		if RoundService.IsPlaying(player) and RoundService.GetStage(player) == Config.HarvesterActiveStage then
+			return true
+		end
+	end
+	return false
+end
+```
+
+### 捕まえ方を変える(`CheckCatch`)
+- `CheckCatch(ctx, player, root)` は、遊んでいる人1人ごとに呼ばれ、捕まえるなら `true` を返します。捕まえたときの処理(`RoundService.NotifyCaught`)は `Perception` がやるので、定義は「捕まえるか」だけ答えます。
+- 稲刈り機は、機械の向きと位置を考えた長方形(横 `HarvesterWidth`、長さ `HarvesterLength`)に入ったら捕まえます。`model:GetPivot():PointToObjectSpace(位置)` で「機械から見た座標」にすると、横が X、前後が Z になるので、絶対値を比べるだけで判定できます。高さは見ません。**潜っているかも見ない**ので、潜っても逃げられません。
+
+### Humanoid を使わない天敵
+- 稲刈り機は Humanoid も経路探索も使わず、`Sweep` 行動が `RunService.Heartbeat`(毎フレームの合図)で、`model:PivotTo(...)` で動かします。行動の `Exit` で、必ず `Disconnect`(つなぎを切る)します。
+- そのため、`ctx.Humanoid` は `nil` のことがあります(`Movement` や `Patrol` などは、`nil` なら何もしません)。体の部品の探し方は `FindBody`、使えるかの確認は `IsModelUsable` で定義が決めます。
+
+### 足し方の手順(まとめ)
+1. 見た目の部品(`ServerStorage/Modules/HarvesterModel.luau`)と、行動(`Behaviors/Sweep.luau`)を作る。
+2. 定義(`Definitions/Harvester.luau`)に、必要な任意の関数を書く。
+3. `EnemyService` の `definitions` に足す(農家さんの次)。
+
