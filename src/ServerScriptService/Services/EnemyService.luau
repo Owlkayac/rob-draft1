@@ -23,7 +23,7 @@ local Harvester = require(script.Parent.Enemy.Definitions.Harvester)
 -- ===== 天敵の種類の一覧 =====
 -- 新しい種類(サギなど)は、Enemy/Definitions にファイルを作って、ここに足すだけ。
 local definitions: { Types.Definition } = {
-	Farmer,
+	Farmer, -- 出番(IsActive)になるまで作らない(仕様書 016:ザリガニのやくわりで遊んでいる間だけ出る)
 	Harvester, -- 出番(IsActive)になるまで作らない
 }
 
@@ -385,7 +385,7 @@ end
 -- 作り直したら true
 local function restartSlot(slot: Slot): boolean
 	if slot.Definition.IsActive then
-		-- 出番がある種類(稲刈り機):モデルを消して、次の出番まで出さない
+		-- 出番がある種類(農家さん・稲刈り機):モデルを消して、次の出番まで出さない(出番なら、判断のループが作り直す)
 		despawn(slot)
 		slot.Finished = false
 		return false
@@ -405,6 +405,22 @@ local function restartSlot(slot: Slot): boolean
 	return false
 end
 
+-- ラウンドが始まったとき(RoundService から呼ばれる)。
+-- 農家さんAIは、「スタート」が通った時点で作られることがある(生まれ直しの間に猶予が減り始めてしまう)ので、
+-- ザリガニのラウンドが本当に始まった時点で、出現直後の猶予(StartGraceSeconds)を、やり直す。
+-- まだ作られていない天敵は、何もしない(作られたときに、buildEnemy が猶予を始める)
+local function onRoundStart(_player: Player, role: string)
+	if role ~= "Crayfish" then
+		return -- 農家さんAIが出るのは、ザリガニのやくわりのときだけ
+	end
+	for _, slot in slots do
+		local ctx = slot.Ctx
+		if ctx ~= nil and ctx.Definition.BaseStats["StartGraceSeconds"] ~= nil then
+			startGrace(ctx) -- 猶予の数字を持つ天敵(農家さん)だけ。稲刈り機などは、触らない
+		end
+	end
+end
+
 -- 使える天敵が1体でもいるか
 local function hasUsableEnemy(): boolean
 	for _, slot in slots do
@@ -416,7 +432,7 @@ local function hasUsableEnemy(): boolean
 	return false
 end
 
--- 出番がある種類が1つでもあるか(あれば、モデルがなくても、ループを動かしておく)
+-- 出番がある種類(農家さん・稲刈り機)が1つでもあるか(あれば、モデルがなくても、ループを動かしておく)
 local function hasGatedSlot(): boolean
 	for _, slot in slots do
 		if slot.Definition.IsActive then
@@ -463,10 +479,11 @@ function EnemyService.Start()
 
 	-- 最初に作れなくても、「もう一度」のときに作り直せるように、先に登録しておく
 	RoundService.OnRestart(onRestart)
+	RoundService.OnRoundStart(onRoundStart) -- ラウンドが始まるたびに、農家さんAIの猶予を、やり直す(登録は1回だけ)
 
 	local anySpawned = false
 	for _, slot in slots do
-		-- 出番がある種類(稲刈り機)は、ここでは作らない。出番になったら、判断のループが作る
+		-- 出番がある種類(農家さん・稲刈り機)は、ここでは作らない。出番になったら、判断のループが作る
 		if slot.Definition.IsActive == nil and spawnEnemy(slot) then
 			anySpawned = true
 		end

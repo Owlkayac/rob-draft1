@@ -12,6 +12,7 @@ print(`[{Config.GameName}] クライアント起動`)
 local CONTROLLER_NAMES = {
 	"DiveController",
 	"JetController",
+	"MenuController", -- スタートメニュー(仕様書 015)
 	"GuiController",
 	"LightingController",
 	"RiceSwayController",

@@ -11,6 +11,7 @@ local ServerStorage = game:GetService("ServerStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local WarnOnce = require(script.Parent.Enemy.WarnOnce)
+local SetupService = require(script.Parent.SetupService)
 
 -- ザリガニの見た目を入れておくフォルダの名前(CrayfishModel と同じ名前)
 local VISUAL_FOLDER_NAME = "CrayfishVisual"
@@ -56,6 +57,17 @@ local function newState(): PlayerState
 		JetReadyAt = -math.huge,
 		LastJetRequestAt = -math.huge,
 	}
+end
+
+-- 農家さんのやくわり(仕様書 016)か。農家さんは、潜る・ジェット・ザリガニの見た目を使わない
+local function isFarmerRole(player: Player): boolean
+	return SetupService.GetRole(player) == "Farmer"
+end
+
+-- 農家さんのラウンド中か(やくわりが農家さんで、フェーズが Playing)。
+-- メニューにいる間は、前に選んだやくわりが残っていても、これまでどおり(ザリガニの見た目・動けない)
+local function isFarmerRound(player: Player): boolean
+	return isFarmerRole(player) and SetupService.GetPhase(player) == "Playing"
 end
 
 local function getHumanoid(player: Player): Humanoid?
@@ -227,6 +239,16 @@ local function setJetEmitter(character: Model?, enabled: boolean)
 	end
 end
 
+-- ジェットのため直しの長さ(秒)。基本の長さに、難易度の倍率(JetCooldownMultiplier。仕様書 015)をかける。
+-- 倍率が使えない値(数字でない・0以下・NaN・無限大)なら 1 倍
+local function getJetCooldownSeconds(player: Player): number
+	local multiplier = SetupService.GetDifficultyParams(player).JetCooldownMultiplier
+	if type(multiplier) ~= "number" or multiplier ~= multiplier or multiplier <= 0 or multiplier == math.huge then
+		multiplier = 1
+	end
+	return Config.JetCooldownSeconds * multiplier
+end
+
 -- 噴射の終わらせ方
 --   "Cooldown": 噴射の時間切れ。ため直しを始める
 --   "Reset":    死亡・生まれ直し。ため直しもなくして、すぐ使える状態に戻す
@@ -258,9 +280,10 @@ local function endJet(player: Player, mode: JetEndMode)
 	setJetEmitter(character, false)
 
 	if mode == "Cooldown" and wasJetting then
-		state.JetReadyAt = os.clock() + Config.JetCooldownSeconds
+		local cooldown = getJetCooldownSeconds(player)
+		state.JetReadyAt = os.clock() + cooldown
 		if character then
-			character:SetAttribute("JetReadyTime", Workspace:GetServerTimeNow() + Config.JetCooldownSeconds)
+			character:SetAttribute("JetReadyTime", Workspace:GetServerTimeNow() + cooldown)
 		end
 	elseif mode == "Reset" then
 		state.JetReadyAt = -math.huge
@@ -304,6 +327,9 @@ local function onJetRequest(player: Player, ...: any)
 	if select("#", ...) ~= 0 then -- (b) 余分な引数
 		return
 	end
+	if isFarmerRole(player) then -- 農家さんは、ジェットを使わない(仕様書 016)
+		return
+	end
 	local now = os.clock()
 	if now - state.LastJetRequestAt < Config.JetRequestMinInterval then -- (c) 連打
 		return
@@ -331,6 +357,9 @@ local function onDiveRequest(player: Player, wantDive: unknown)
 		return
 	end
 	if typeof(wantDive) ~= "boolean" then -- (b) 型
+		return
+	end
+	if isFarmerRole(player) then -- 農家さんは、潜らない(仕様書 016)
 		return
 	end
 
@@ -364,6 +393,9 @@ end
 -- ザリガニの見た目をつけて、人型の見た目を隠す(仕様書 005)。何回呼んでも安全。
 -- Attach が失敗したら、人型を隠さない(プレイヤーが見えなくなるのを防ぐ)
 local function applyLook(player: Player, character: Model)
+	if isFarmerRound(player) then
+		return -- 農家さんのラウンドでは、人型のまま(巨人にするのは FarmerPlayer)
+	end
 	if not CrayfishModel.Attach(character) then
 		WarnOnce.Warn(
 			"CrayfishAttachFailed",
@@ -388,10 +420,12 @@ local function setupCharacter(player: Player, character: Model)
 	resetDiveState(player)
 	resetJetState(player)
 
-	-- 新しく生まれ直したら、生きている状態に戻す(つかまった後のやり直しに備える)
+	-- 新しく生まれ直したら、生きている状態に戻す(つかまった後のやり直しに備える)。
+	-- ただし、メニューにいる間は、動けない・潜れない・ジェットできない状態にする(仕様書 015。RoundService も同じ状態にする)
+	local inMenu = SetupService.GetPhase(player) == "Menu"
 	local state = states[player]
 	if state then
-		state.Alive = true
+		state.Alive = not inMenu
 	end
 
 	local found = character:WaitForChild("Humanoid", Config.CharacterWaitSeconds)
@@ -400,7 +434,10 @@ local function setupCharacter(player: Player, character: Model)
 		return
 	end
 	local humanoid = found :: Humanoid
-	humanoid.WalkSpeed = Config.CrayfishWalkSpeed
+	if isFarmerRound(player) then
+		return -- 農家さんのラウンド:歩く速さ・ジャンプ禁止・見た目は FarmerPlayer が決める(仕様書 016)
+	end
+	humanoid.WalkSpeed = if inMenu then 0 else Config.CrayfishWalkSpeed
 	humanoid.UseJumpPower = true
 	humanoid.JumpPower = 0 -- ジャンプ禁止
 	-- 死んだときに関節(Motor6D)が壊れて、足・はさみ・ひげがばらばらに落ちないようにする(仕様書 010)

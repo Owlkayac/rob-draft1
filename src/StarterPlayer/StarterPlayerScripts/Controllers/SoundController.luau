@@ -17,6 +17,7 @@ local SoundController = {}
 
 local HIDDEN_ATTRIBUTE = "Hidden" -- 潜っているとき、サーバーがキャラクターにつける目印
 local JETTING_ATTRIBUTE = "Jetting" -- ジェット噴射中、サーバーがキャラクターにつける目印(仕様書 013)
+local STATE_MENU = "Menu" -- スタートメニューの間(仕様書 015)
 local STATE_PLAYING = "Playing"
 local STATE_CAUGHT = "Caught"
 local STATE_CLEARED = "Cleared"
@@ -95,6 +96,27 @@ local function onPlaying()
 	end
 end
 
+-- Menu:環境音を止める(メニューの間は鳴らさない)。次の Playing で、元の音量で鳴らし直す。
+-- Caught・Clear の効果音は鳴らさない
+local function onMenu()
+	local ambient = getSound("Ambient")
+	if ambient == nil then
+		return
+	end
+	local old = ambientTween
+	if old then
+		old:Cancel()
+		ambientTween = nil
+	end
+	if ambient.Playing then
+		ambient:Stop()
+	end
+	if ambientDucked then
+		ambientDucked = false
+		ambient.Volume = SoundUtil.GetVolume("Ambient") -- 小さくしていた音量を、元に戻しておく
+	end
+end
+
 -- Caught・Cleared:環境音を小さくする
 local function duckAmbient()
 	local ambient = getSound("Ambient")
@@ -105,13 +127,16 @@ local function duckAmbient()
 	tweenAmbientVolume(ambient, math.clamp(Config.SoundAmbientDuckVolume, 0, 1))
 end
 
--- RoundState を受け取る。状態が「変わったとき」だけ、Caught・Clear を1回鳴らす
+-- RoundState を受け取る。状態が「変わったとき」だけ、Caught・Clear を1回鳴らす。
+-- Menu は、サーバーが毎秒くり返し送ってくる(取りこぼし対策)ので、何回来ても安全な作りにしてある
 local function onRoundState(state: unknown, _stageName: unknown, _remaining: unknown)
 	if typeof(state) ~= "string" then
 		return
 	end
 	local newState = state :: string
-	if newState == STATE_PLAYING then
+	if newState == STATE_MENU then
+		onMenu()
+	elseif newState == STATE_PLAYING then
 		onPlaying()
 	elseif newState == STATE_CAUGHT or newState == STATE_CLEARED then
 		duckAmbient()

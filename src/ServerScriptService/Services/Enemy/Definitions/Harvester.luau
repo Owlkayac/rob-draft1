@@ -13,6 +13,7 @@ local Types = require(script.Parent.Parent.Types)
 local Sweep = require(script.Parent.Parent.Behaviors.Sweep)
 local SweepRoute = require(script.Parent.Parent.SweepRoute)
 local RoundService = require(script.Parent.Parent.Parent.RoundService)
+local SetupService = require(script.Parent.Parent.Parent.SetupService)
 
 -- 見た目の部品は ServerStorage/Modules にある(Rojo の対応は default.project.json)
 local modulesFolder = ServerStorage:WaitForChild("Modules", 10)
@@ -21,10 +22,15 @@ local harvesterModelScript = modulesFolder:WaitForChild("HarvesterModel", 10)
 assert(harvesterModelScript, "[Harvester] HarvesterModel が見つかりません")
 local HarvesterModel = require(harvesterModelScript :: ModuleScript)
 
--- 出番か:遊んでいるプレイヤーのうち、稲の段階が「出穂」(Config.HarvesterActiveStage)の人が1人でもいれば true
+-- 出番か:遊んでいるプレイヤーのうち、やくわりがザリガニで、稲の段階が「出穂」(Config.HarvesterActiveStage)の人が1人でもいれば true。
+-- 農家さんのやくわり(仕様書 016)のラウンドでは、稲刈り機は出ない
 local function isActive(): boolean
 	for _, player in Players:GetPlayers() do
-		if RoundService.IsPlaying(player) and RoundService.GetStage(player) == Config.HarvesterActiveStage then
+		if
+			RoundService.IsPlaying(player)
+			and SetupService.GetRole(player) == "Crayfish"
+			and RoundService.GetStage(player) == Config.HarvesterActiveStage
+		then
 			return true
 		end
 	end

@@ -2,6 +2,10 @@
 -- ゲームの設定値(価格、時間、確率など)はここにまとめる。
 -- コードの中に数字を直書きしない。
 
+-- 1回の長さ(秒)。「5分間」などの文言も、ここから計算する(数字を2か所に書かない)
+local ROUND_SECONDS = 300
+local ROUND_MINUTES_TEXT = string.format("%g", ROUND_SECONDS / 60) -- 300 秒 → "5"
+
 local Config = {
 	GameName = "ZARIGANI",
 
@@ -80,7 +84,7 @@ local Config = {
 	PatrolPointRatio = 0.25, -- 見回り地点の位置(田んぼの一辺に対する割合。中心から±この割合)
 
 	-- 稲の成長とクリア(仕様書 003)
-	RoundSeconds = 300, -- 1回の長さ(稲刈りの日までの時間・秒)
+	RoundSeconds = ROUND_SECONDS, -- 1回の長さ(稲刈りの日までの時間・秒)
 	-- 段階2・3に切り替わる経過時間(秒)。
 	-- 3つめ(出穂の始まり)は、稲刈り機(仕様書 006)が走り切る時間から決める:
 	--   経路の長さ ÷ HarvesterSpeed + HarvesterEntryDelaySeconds < RoundSeconds - 出穂の始まり
@@ -457,7 +461,128 @@ local Config = {
 	BestScoreRetryWaitSeconds = 1, -- やり直すまでの待ち時間(秒)
 	BestScoreCloseWaitSeconds = 20, -- サーバーが閉じるとき、保存を待つ最大の時間(秒)
 	BestScoreCloseWaitStepSeconds = 0.1, -- サーバーが閉じるとき、保存が終わったかを見る間隔(秒)
-	ScoreStateRemoteName = "ScoreState", -- サーバー→クライアント:点数・ベスト・ベスト更新か・食べたか
+	ScoreStateRemoteName = "ScoreState", -- サーバー→クライアント:点数・ベスト(いまの「やくわり」×「なんいど」)・ベスト更新か・食べたか
+	BestScoresRemoteName = "BestScores", -- サーバー→クライアント:ベスト記録の表(キーは "Crayfish_Normal" のような「やくわり_なんいど」)
+
+	-- スタートメニューと難易度(仕様書 015。調整のしかたは docs/design/difficulty.md)
+	-- 「やくわり」。Ready が false の間は、メニューで選んでも「スタート」を押せない(農家さんは仕様書 016 で true にした)
+	Roles = {
+		Crayfish = { Label = "ザリガニ(にげる)", Hint = `農家さんから、{ROUND_MINUTES_TEXT}分間、にげきれ!`, Ready = true },
+		Farmer = { Label = "農家さん(つかまえる)", Hint = "ザリガニを、ぜんぶ つかまえろ!", Ready = true },
+	} :: { [string]: { Label: string, Hint: string, Ready: boolean } },
+	RoleOrder = { "Crayfish", "Farmer" }, -- メニューに並べる順
+	DefaultRole = "Crayfish",
+	-- 「なんいど」。やさしい = そのやくわりで、勝ちやすい。数字はすべて「倍率」か「足す秒数」か「数」
+	--   Farmer...                : 農家さんAIの数字にかける倍率(ザリガニで遊ぶとき)
+	--   HarvesterEntryDelayBonus : 稲刈り機の「入るまでの待ち」に足す秒数(マイナスで短く)
+	--   JetCooldownMultiplier    : ジェットのため直しにかける倍率
+	--   ScoreMultiplier          : 点数にかける倍率
+	--   Prey...                  : AIザリガニの数と強さ(農家さんで遊ぶとき。仕様書 016。PreyService が使う)
+	-- 追跡の速さの上限(FarmerChaseMaxSpeedRatio)と、稲刈り機の速さは、公平さと走り切るために、変えない
+	Difficulties = {
+		Easy = {
+			FarmerSightMultiplier = 0.8,
+			FarmerNoticeMultiplier = 1.4,
+			FarmerHunchMultiplier = 0.4,
+			FarmerLoseSightMultiplier = 0.7,
+			HarvesterEntryDelayBonus = 1.5,
+			JetCooldownMultiplier = 0.75,
+			ScoreMultiplier = 0.8,
+			PreyCount = 2,
+			PreySpeedMultiplier = 0.9,
+			PreyAwarenessMultiplier = 0.8,
+		},
+		Normal = {
+			FarmerSightMultiplier = 1.0,
+			FarmerNoticeMultiplier = 1.0,
+			FarmerHunchMultiplier = 1.0,
+			FarmerLoseSightMultiplier = 1.0,
+			HarvesterEntryDelayBonus = 0,
+			JetCooldownMultiplier = 1.0,
+			ScoreMultiplier = 1.0,
+			PreyCount = 3,
+			PreySpeedMultiplier = 1.0,
+			PreyAwarenessMultiplier = 1.0,
+		},
+		Hard = {
+			FarmerSightMultiplier = 1.2,
+			FarmerNoticeMultiplier = 0.8,
+			FarmerHunchMultiplier = 1.6,
+			FarmerLoseSightMultiplier = 1.4,
+			HarvesterEntryDelayBonus = -1.0,
+			JetCooldownMultiplier = 1.3,
+			ScoreMultiplier = 1.3,
+			PreyCount = 5,
+			PreySpeedMultiplier = 1.1,
+			PreyAwarenessMultiplier = 1.2,
+		},
+	} :: { [string]: { [string]: number } },
+	DifficultyLabels = { Easy = "やさしい", Normal = "ふつう", Hard = "むずかしい" } :: { [string]: string }, -- 画面に出す名前
+	DifficultyOrder = { "Easy", "Normal", "Hard" }, -- メニューに並べる順
+	DefaultDifficulty = "Normal",
+	StartRequestRemoteName = "StartRequest", -- クライアント→サーバー:「スタート」(やくわり・なんいど)
+	MenuRequestRemoteName = "MenuRequest", -- クライアント→サーバー:「メニューへ」
+	StartRequestMinInterval = 1, -- 「スタート」の受け付け間隔の最小値(秒)
+	MenuRequestMinInterval = 1, -- 「メニューへ」の受け付け間隔の最小値(秒)
+	StartStuckSeconds = 8, -- 「スタート」のあと、ラウンドが始まらないまま(State が Menu のまま)この秒数が過ぎたら、メニューに戻す(保険)。0 にしない
+	DifficultyNoticeFloorSeconds = 0.4, -- 「気づく間」は、難易度で短くしても、これより短くしない(秒。公平さのため)
+	HarvesterEntryDelayMinSeconds = 0.5, -- 稲刈り機の「入るまでの待ち」は、難易度で短くしても、これより短くしない(秒)
+	HarvesterWarningExtraSeconds = 1, -- 稲刈り機の予告(画面の文字)は、「入るまでの待ち」に、この秒数を足した長さだけ出す(秒。GuiController)
+	-- 注意: HarvesterEntryDelaySeconds + HarvesterEntryDelayBonus の最大(やさしい = 3 + 1.5 = 4.5秒)でも、
+	--       ラウンドの中に走り切れる(165 + 4.5 + 126.3 + 1.2 ≒ 297秒 < 300秒)。ボーナスを大きくしたら、GrowthStageSeconds の2つめも見直す
+
+	-- 農家さんモード(仕様書 016。調整のしかたは docs/design/farmer-mode.md)
+	-- 注意: 「時間」「間隔」「距離」の数字は 0 にしない(コード側でも 0.001 より小さくしないが、0 にしない約束)。Min は Max 以下にする
+	-- プレイヤーの農家さん(巨人の大きさは FarmerScale、つかまえる距離は FarmerCatchDistance などを共用)
+	FarmerPlayerWalkSpeed = 15, -- 歩く速さ。AIザリガニの歩く速さ(PreyWalkSpeed)より少し速い
+	FarmerPlayerCameraMin = 20, -- カメラのいちばん近いズーム距離(巨人が大きいので、遠くから見る)
+	FarmerPlayerCameraMax = 60, -- カメラのいちばん遠いズーム距離
+	DefaultCameraMinZoom = 0.5, -- Roblox の標準のズーム距離(近い側)。元の値が分からないときに戻す先
+	DefaultCameraMaxZoom = 128, -- Roblox の標準のズーム距離(遠い側)
+	FarmerPlayerAppearanceWaitSeconds = 6, -- 服や髪が読み込まれるのを待つ最大の時間(秒)。読み込んだあとで巨人にする(あとから付く服も大きくなるように)
+	FarmerPlayerAppearancePollSeconds = 0.1, -- 読み込めたかを見る間隔(秒)。0 にしない
+	FarmerPlayerSpawnLift = 1.5, -- 巨人にしたあと、足元をゆか上面からこの高さに合わせる(スタート地点の台の上に立つので、少し高め)
+	-- AIザリガニ(PreyService)の速さと、気づく距離
+	PreyWalkSpeed = 13, -- 歩く速さ(× 難易度の PreySpeedMultiplier)。プレイヤーの農家さん(15)より、すこし遅い
+	PreySightDistance = 35, -- 農家さんに気づいて逃げ出す距離(× 難易度の PreyAwarenessMultiplier)
+	PreyCalmRatio = 1.15, -- 逃げている途中で、気づく距離のこの倍より離れたら、落ち着いて「うろうろ」に戻る(逃げ出す境目で行き来しないため)
+	-- 潜る(Dive)
+	PreyDiveDistance = 16, -- 農家さんがこの距離以内に近づいたら、潜ることがある
+	PreyDiveChance = 0.5, -- 潜る確率(0〜1)
+	PreyDiveSeconds = 3, -- 潜っている時間(秒)。潜っている間は動けない
+	PreyDiveCooldownSeconds = 7, -- 浮上してから、次に潜れるまでの時間(秒)
+	-- ジェット(Jet。噴射の長さと速さは、プレイヤーと同じ JetSeconds と JetSpeedMultiplier)
+	PreyJetDistance = 11, -- 農家さんがこの距離以内に近づいたら、ジェットすることがある
+	PreyJetChance = 0.7, -- ジェットの確率(0〜1)
+	PreyJetCooldownSeconds = 9, -- 噴射が終わってから、次に使えるまでの時間(秒)
+	PreyAbilityRollSeconds = 1.0, -- 潜る・ジェットの「くじ」がはずれたとき、次にくじを引くまでの待ち(秒)。毎回(0.2秒ごと)引くと、ほぼ必ず発動してしまうため
+	-- 判断のゆらぎ(完璧に逃げない)
+	PreyReactionSecondsMin = 0.2, -- 状態を変える前の、反応の遅れの最小(秒)
+	PreyReactionSecondsMax = 0.5, -- 同じく最大(秒)
+	PreyStartGraceSeconds = 3, -- 出現してから、この間は逃げない(うろうろする)(秒)
+	-- うろうろ(Wander)
+	PreyWanderSpeedRatio = 0.6, -- うろうろするときの速さ(PreyWalkSpeed × 難易度 に、この割合をかける。逃げるときは 1 倍)
+	PreyWanderPauseChance = 0.4, -- 行き先に着いたとき、立ち止まる確率(0〜1)
+	PreyWanderPauseSecondsMin = 1.0, -- 立ち止まる時間の最小(秒)
+	PreyWanderPauseSecondsMax = 3.0, -- 同じく最大(秒)
+	PreyWanderArriveDistance = 2.5, -- 行き先に「着いた」とみなす距離
+	PreyWanderTargetTimeoutSeconds = 10, -- 行き先に、この時間(秒)以内に着かなければ、選び直す(着けないときの保険)
+	-- 逃げる(Flee)と壁
+	PreyFleeStepStuds = 20, -- 逃げるとき、1回の目的地までの距離(農家さんから遠ざかる向きに、この距離ぶん先を目指す)
+	PreyWallMargin = 8, -- 壁から、この距離より内側を動く(逃げるときも、うろうろするときも)
+	PreyWallSlideEpsilon = 1.5, -- 壁からこの距離以内なら「壁に押しつけられている」とみなして、壁にそって逃げる
+	PreyWallSlideMinRatio = 0.3, -- 壁に向かう成分を消したあとの向きの大きさがこれ未満なら(ほぼ壁に垂直)、壁にそって逃げる向きに変える
+	-- 出現と数
+	PreyCountMax = 12, -- 1回に出すザリガニの数の上限(難易度の PreyCount が大きすぎたときの安全のため)
+	PreySpawnZoneRatio = 0.5, -- 出現する場所:田んぼの北から、一辺のこの割合まで(0.5 = 北半分。スタート地点は南端)
+	PreySpawnMargin = 0.3, -- 出現位置の高さの余裕(ゆかにめり込まないように、少しだけ上に置く)
+	PreyFallbackRootSize = Vector3.new(2, 2, 1), -- 簡易モデル(人型を作れなかったとき):HumanoidRootPart の大きさ(見えない)
+	PreyFallbackHipHeight = 1, -- 簡易モデルの HipHeight
+	PreyTemplateWaitSeconds = 20, -- 見本(人型)が作られるのを待つ最大の時間(秒)
+	PreyTemplatePollSeconds = 0.1, -- 見本ができたかを見る間隔(秒)。0 にしない
+	-- 点数(仕様書 016 の 5。クリアのボーナスは ClearBonus、難易度の倍率は ScoreMultiplier を共用)
+	PreyCatchPoints = 100, -- 1ぴきつかまえたときの点
+	PreyTimeBonusPerSecond = 1, -- クリアしたとき、のこり1秒ごとの点
 }
 
 return Config

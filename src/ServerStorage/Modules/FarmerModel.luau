@@ -2,6 +2,7 @@
 -- 農家さんの「見た目」だけを作る部品。動きの判断は EnemyService が行う。(仕様書 002)
 -- 外部の素材は使わず、Roblox 標準の人型(R15)と、図形の麦わら帽子で作る。
 -- 大きさは Config.FarmerScale 倍(仕様書 002 の 8)。足元の高さの補正もここ(PlaceAt)。帽子の大きさの数字は「標準サイズ基準」。
+-- 仕様書 016:帽子を作る処理(AddHat)は、巨人になったプレイヤーの頭にもつけられるよう、公開してある。
 -- 仕様書 014:頭の上の表示(BillboardGui "StateSign")と、行動の名前を伝える Attribute "EnemyState" もここ(SetState)。
 
 local Players = game:GetService("Players")
@@ -47,26 +48,48 @@ local function makeDisc(name: string, height: number, diameter: number, head: Ba
 	return part
 end
 
--- 麦わら帽子(つば+山)を頭につける。scale は、モデルがいま何倍の大きさか(帽子も同じ倍率にする)。
--- 大きくしたあとで、実際の頭の大きさを見てつけるので、ずれない
+-- 帽子の部品の名前(つけ直すとき、古い帽子を消すために使う)
+local HAT_PART_NAMES = { "HatBrim", "HatCrown" }
+
+-- 麦わら帽子(つば+山)を、頭(head)につける。農家さんAIと、巨人になったプレイヤー(仕様書 016)の両方が使う。
+-- scale は、頭がいま何倍の大きさか(帽子も同じ倍率にする。省略か 0 以下なら 1)。
+-- 大きくしたあとで、実際の頭の大きさを見てつけるので、ずれない。
+-- 帽子の部品は、head と同じ入れ物(キャラクターやモデル)に入れる。古い帽子があれば、先に消す(二重にならない)
+function FarmerModel.AddHat(head: BasePart, scale: number?)
+	local parent = head.Parent
+	if parent == nil then
+		warn("[FarmerModel] 頭が Workspace などに入っていないので、帽子をつけられません")
+		return
+	end
+	local usedScale = if scale ~= nil and scale > 0 then scale else 1
+	for _, name in HAT_PART_NAMES do
+		local old = parent:FindFirstChild(name)
+		if old then
+			old:Destroy()
+		end
+	end
+	local headTop = head.Size.Y / 2
+	local brimThickness = Config.FarmerHatBrimThickness * usedScale
+	local crownHeight = Config.FarmerHatCrownHeight * usedScale
+	local brimDiameter = Config.FarmerHatBrimDiameter * usedScale
+	local crownDiameter = Config.FarmerHatCrownDiameter * usedScale
+
+	-- つば:頭のてっぺんの上に、うすく広く
+	local brim = makeDisc(HAT_PART_NAMES[1], brimThickness, brimDiameter, head, headTop + brimThickness / 2)
+	brim.Parent = parent
+	-- 山:つばの上に、少し細く高く
+	local crown = makeDisc(HAT_PART_NAMES[2], crownHeight, crownDiameter, head, headTop + brimThickness + crownHeight / 2)
+	crown.Parent = parent
+end
+
+-- 麦わら帽子を、モデルの頭につける(農家さんAI用)。頭がなければ警告して、何もしない
 local function attachHat(model: Model, scale: number)
 	local head = model:FindFirstChild("Head")
 	if not head or not head:IsA("BasePart") then
 		warn("[FarmerModel] Head が見つからないので、帽子をつけられません")
 		return
 	end
-	local headTop = head.Size.Y / 2
-	local brimThickness = Config.FarmerHatBrimThickness * scale
-	local crownHeight = Config.FarmerHatCrownHeight * scale
-	local brimDiameter = Config.FarmerHatBrimDiameter * scale
-	local crownDiameter = Config.FarmerHatCrownDiameter * scale
-
-	-- つば:頭のてっぺんの上に、うすく広く
-	local brim = makeDisc("HatBrim", brimThickness, brimDiameter, head, headTop + brimThickness / 2)
-	brim.Parent = model
-	-- 山:つばの上に、少し細く高く
-	local crown = makeDisc("HatCrown", crownHeight, crownDiameter, head, headTop + brimThickness + crownHeight / 2)
-	crown.Parent = model
+	FarmerModel.AddHat(head, scale)
 end
 
 -- ===== 頭の上の表示(仕様書 014 の 2) =====

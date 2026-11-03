@@ -59,7 +59,7 @@ Config -> SweepRoute -> Sweep(Behaviors)、Harvester(Definitions)   ※ SweepRou
 | `Services/EnemyService.luau` | 全体の進行役。定義の一覧から天敵を作り、動きのループを1つ回し、「もう一度」でやり直す。天敵ごとの状態は `slots` の表に持つ(将来、天敵が複数になっても動く)。 |
 | `Enemy/Types.luau` | 共有する型。`Context`(状態のメモ)、`Behavior`(行動)、`ModifierFn`(補正)、`Definition`(天敵の定義)。処理は入っていない。 |
 | `Enemy/WarnOnce.luau` | `WarnOnce.Warn(見出し, 文)` で、同じ見出しの警告を 1 回だけ出す。毎回の判断で同じエラーが続いても、Output が警告であふれない。 |
-| `Enemy/Stats.luau` | `Stats.Get(定義, "数字の名前", 相手)` で、いまの数字を返す。`Stats.RegisterModifier(名前, 関数)` で補正を足す。最初から "RiceGrowth"(稲の成長で発見距離が縮む)が登録されている。 |
+| `Enemy/Stats.luau` | `Stats.Get(定義, "数字の名前", 相手)` で、いまの数字を返す。`Stats.RegisterModifier(名前, 関数)` で補正を足す。最初から "RiceGrowth"(稲の成長で発見距離が縮む)と "Difficulty"(難易度。仕様書 015。`docs/design/difficulty.md`)が登録されている。 |
 | `Enemy/Perception.luau` | 見える・見えないの判定、いちばん近い相手、捕まえる判定。距離は横方向(XZ)だけで測る。 |
 | `Enemy/Movement.luau` | 目的地へ歩く。経路を作り直す、作れなければ直接向かう、古い計算結果を捨てる(世代番号)。 |
 | `Enemy/EnemyRandom.luau` | ランダムの道具。`EnemyRandom.New()` で天敵ごとの乱数を作る。`Seconds`(最小〜最大の秒数。0.001 秒より小さくならない)、`Chance`(確率)、`Jitter`(±のゆらぎの倍率)、`PointInField`・`PointNear`(田んぼの中のランダムな場所)。数字は `Stats.Get` で取る。 |
@@ -70,6 +70,12 @@ Config -> SweepRoute -> Sweep(Behaviors)、Harvester(Definitions)   ※ SweepRou
 
 捕まえる判定は、行動の中ではなく、EnemyService が毎回の最初に行います。
 これで、見回り・追跡・探すのどの最中でも、同じルールで判定されます。
+
+### 出番(IsActive)について(仕様書 016 で、農家さんにも持たせた)
+`Definition.IsActive` を持つ種類は、「出番のときだけ」作られ、出番でなくなると消される(`EnemyService` の `updateGatedSlot`)。稲刈り機(稲が出穂の段階のとき)に加えて、**農家さん**も、仕様書 016 から `IsActive` を持つ: 「ザリガニのやくわりで、ゲームを始めている(フェーズが `Playing`)プレイヤーがいるとき」だけ出る。
+- 農家さんのやくわり(プレイヤーが巨人の農家さんになる)のラウンドと、メニューにいる間は、出ない(あれば消える)。
+- 結果の画面の間は、フェーズが `Playing` のままなので、農家さんは残る。「メニューへ」で消える。
+- 「もう一度」・スタートのたびに(`restartSlot`)、いったん消えて、出番なら、判断のループが作り直す(作り直しのあいだ、1〜2秒、農家さんがいない。出現から `FarmerStartGraceSeconds` は見つけない)。
 
 ## 3. 新しい天敵の種類を足す手順(サギを例に)
 

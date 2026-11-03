@@ -6,6 +6,10 @@
 local Types = require(script.Parent.Types)
 local WarnOnce = require(script.Parent.WarnOnce)
 local RoundService = require(script.Parent.Parent.RoundService)
+local SetupService = require(script.Parent.Parent.SetupService)
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Config = require(ReplicatedStorage.Shared.Config)
 
 local Stats = {}
 
@@ -98,6 +102,60 @@ Stats.RegisterModifier("RiceGrowth", function(info: Types.ModifierInfo): Types.S
 		return nil
 	end
 	return { SightDistance = RoundService.GetSightMultiplier(player) }
+end)
+
+-- 難易度による補正(仕様書 015)。農家さんの「見つけやすさ・気づく早さ・勘・しつこさ」に、難易度の倍率をかける。
+-- 難易度は、狙っているプレイヤー(info.Player)のもの。いなければ(見回りの「勘」など)、
+-- いちばん新しく「スタート」を押したプレイヤーのもの。
+-- 追跡の速さの上限(ChaseSpeedMax)と、稲刈り機の速さは、公平さのために、変えない(ここでは触らない)。
+-- 稲刈り機の「入るまでの待ち」は、倍率ではなく足し算なので、Sweep が SetupService から読む。
+
+-- 難易度の数字の表から、倍率を1つ取り出す。使えない値(数字でない・0以下・NaN・無限大)なら 1
+local function getMultiplier(params: { [string]: number }, name: string): number
+	local value = params[name]
+	if type(value) ~= "number" or value ~= value or value <= 0 or value == math.huge then
+		return 1
+	end
+	return value
+end
+
+-- 倍率 multiplier を、基本の数字 base にかけた結果が lowest 未満にならないように、倍率を直す。
+-- base が lowest 以下なら、基本の数字より大きくはしない(下限を理由に、強めない)
+local function raiseMultiplierToFloor(multiplier: number, base: number?, lowest: number): number
+	if base == nil or base <= 0 then
+		return multiplier
+	end
+	return math.max(multiplier, math.min(1, lowest / base))
+end
+
+-- 倍率 multiplier を、基本の数字 base にかけた結果が 1 を超えないように、倍率を直す(確率用)
+local function capMultiplierToOne(multiplier: number, base: number?): number
+	if base == nil or base <= 0 then
+		return multiplier
+	end
+	return math.min(multiplier, math.max(1 / base, 1))
+end
+
+Stats.RegisterModifier("Difficulty", function(info: Types.ModifierInfo): Types.StatTable?
+	local base = info.Definition.BaseStats
+	if base.SightDistance == nil then
+		return nil -- 見つける数字を持たない天敵(稲刈り機)は、対象外(毎フレーム読まれるので、早めに戻る)
+	end
+	local player = info.Player
+	local params = if player ~= nil then SetupService.GetDifficultyParams(player) else SetupService.GetLatestDifficultyParams()
+
+	local noticeMultiplier = getMultiplier(params, "FarmerNoticeMultiplier")
+	local loseSight = getMultiplier(params, "FarmerLoseSightMultiplier")
+	local floorSeconds = Config.DifficultyNoticeFloorSeconds
+	return {
+		SightDistance = getMultiplier(params, "FarmerSightMultiplier"),
+		-- 気づく間(短くしても、最低 DifficultyNoticeFloorSeconds は守る)
+		NoticeSecondsMin = raiseMultiplierToFloor(noticeMultiplier, base.NoticeSecondsMin, floorSeconds),
+		NoticeSecondsMax = raiseMultiplierToFloor(noticeMultiplier, base.NoticeSecondsMax, floorSeconds),
+		HunchChance = capMultiplierToOne(getMultiplier(params, "FarmerHunchMultiplier"), base.HunchChance), -- 確率は 1 を超えない
+		LoseSightSecondsMin = loseSight,
+		LoseSightSecondsMax = loseSight,
+	}
 end)
 
 return Stats

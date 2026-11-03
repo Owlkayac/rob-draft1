@@ -18,6 +18,8 @@ local EnemyRandom = require(script.Parent.Parent.EnemyRandom)
 local SweepRoute = require(script.Parent.Parent.SweepRoute)
 -- Behaviors → Enemy → Services の順に上がって、FieldService を読み込む(FieldService は Config だけを使うので、循環しない)
 local FieldService = require(script.Parent.Parent.Parent.FieldService)
+-- 難易度(入るまでの待ち)を読む。SetupService は、ほかのサービスを読み込まないので、循環しない(仕様書 015)
+local SetupService = require(script.Parent.Parent.Parent.SetupService)
 
 -- 稲刈り機1台ぶんの、動きの記憶
 type SweepState = {
@@ -38,6 +40,17 @@ local states: { [Types.Context]: SweepState } = {} -- ctx ごとの記憶(Exit �
 -- モデルの基準点は「機械の底」なので、y を床の上面にすれば、底が床につく
 local function placeModel(model: Model, point: Vector3, direction: Vector3)
 	model:PivotTo(CFrame.lookAt(point, point + direction))
+end
+
+-- 入ってくるまでの待ち(秒)。基本の長さに、難易度のボーナス(HarvesterEntryDelayBonus。足す秒数)を足す。
+-- 難易度は、いちばん新しく「スタート」を押したプレイヤーのもの。短くしても、最低 Config.HarvesterEntryDelayMinSeconds は待つ。
+-- (予告「稲刈り機が動き出した!」は、クライアントが、この待ちと同じ計算の長さ + Config.HarvesterWarningExtraSeconds だけ出す。GuiController)
+local function entryDelaySeconds(): number
+	local bonus = SetupService.GetLatestDifficultyParams().HarvesterEntryDelayBonus
+	if type(bonus) ~= "number" or bonus ~= bonus or math.abs(bonus) == math.huge then
+		bonus = 0
+	end
+	return math.max(Config.HarvesterEntryDelaySeconds + bonus, Config.HarvesterEntryDelayMinSeconds)
 end
 
 -- 区間 segment の進む向き(長さ1)。長さ0なら南向き
@@ -164,7 +177,7 @@ local function enter(ctx: Types.Context)
 		Distance = 0,
 		Segment = 1,
 		SpeedFactors = buildSpeedFactors(ctx, #points - 1),
-		WaitLeft = Config.HarvesterEntryDelaySeconds,
+		WaitLeft = entryDelaySeconds(),
 		Emitting = false,
 	}
 	state.Total = state.Cumulative[#points]

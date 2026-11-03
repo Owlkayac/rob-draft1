@@ -2,12 +2,18 @@
 -- 天敵の種類「農家さん」の定義。(仕様書 002)
 -- 名前、見た目の作り方、基本の数字、使う行動の一覧、最初の行動を書く。
 -- 新しい種類(サギなど)は、このファイルをまねて Definitions に足し、EnemyService の一覧に登録する。
+-- 仕様書 016:農家さんAIの出番(IsActive)は、「ザリガニのやくわりで遊んでいる人がいるとき」だけ。
+--   農家さんのやくわり(プレイヤーが巨人の農家さんになる)のラウンドや、メニューにいる間は、出ない(消える)。
+--   出現直後の猶予(StartGraceSeconds)は、作られたときに始まり、ラウンドが始まるたびに、EnemyService が、やり直す
+--   (「スタート」から生まれ直しまでの間に、猶予が減ってしまわないように)。
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local Types = require(script.Parent.Parent.Types)
+local SetupService = require(script.Parent.Parent.Parent.SetupService)
 local Patrol = require(script.Parent.Parent.Behaviors.Patrol)
 local Notice = require(script.Parent.Parent.Behaviors.Notice)
 local Chase = require(script.Parent.Parent.Behaviors.Chase)
@@ -78,6 +84,18 @@ local baseStats: Types.StatTable = {
 }
 applyScale(baseStats, Config.FarmerScale) -- 最初は設定の倍率。モデルを作るたびに、実際の倍率で入れ直す
 
+-- 出番か:ザリガニのやくわりで、ゲームを始めている(フェーズが Playing)人が1人でもいれば true。
+-- 結果の画面(つかまった・クリアのあと)の間も、フェーズは Playing なので、農家さんは、そのまま残る。
+-- 「メニューへ」で、フェーズが Menu に戻ると、消える
+local function isActive(): boolean
+	for _, player in Players:GetPlayers() do
+		if SetupService.GetPhase(player) == "Playing" and SetupService.GetRole(player) == "Crayfish" then
+			return true
+		end
+	end
+	return false
+end
+
 -- 見た目を作る。大きくするのに失敗して 1 倍のままのときは、距離の数字も 1 倍に合わせる
 local function create(): Model
 	local model, usedScale = FarmerModel.Create()
@@ -100,6 +118,7 @@ local Farmer: Types.Definition = {
 	},
 	InitialBehavior = "Patrol",
 	OnBehaviorChanged = FarmerModel.SetState, -- 行動が変わるたびに、EnemyState と頭の上の「!」「?」を切り替える
+	IsActive = isActive, -- ザリガニのやくわりで遊んでいる間だけ出す(仕様書 016)
 }
 
 return Farmer

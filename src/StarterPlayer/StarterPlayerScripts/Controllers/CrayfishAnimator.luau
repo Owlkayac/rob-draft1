@@ -41,6 +41,7 @@ type AnimEntry = {
 	Visual: Folder, -- CrayfishVisual
 	Character: Model,
 	Root: BasePart?, -- HumanoidRootPart(見つかったら覚える)
+	PrevPosition: Vector3?, -- 前のフレームの位置(位置の差から速さを求める。まだ見ていない・見えなくなったときは nil)
 	Legs: { JointEntry },
 	Claws: { JointEntry },
 	Antennae: { JointEntry },
@@ -130,6 +131,7 @@ local function registerVisual(instance: Instance)
 		Visual = instance,
 		Character = character,
 		Root = nil,
+		PrevPosition = nil,
 		Legs = {},
 		Claws = {},
 		Antennae = {},
@@ -186,10 +188,28 @@ local function getRoot(entry: AnimEntry): BasePart?
 	return nil
 end
 
--- 水平方向の速さ(スタッド/秒)。上下の動き(ジャンプなど)は含めない
-local function horizontalSpeed(root: BasePart): number
+-- 水平方向の速さ(スタッド/秒)。上下の動き(ジャンプなど)は含めない。
+-- サーバーが動かしている NPC(AIザリガニ)は、クライアントでは AssemblyLinearVelocity が 0 に見えることがある。
+-- そのため、「前のフレームとの位置の差 ÷ dt」(水平成分)も求めて、大きいほうを使う(EnemyPresenceController と同じ考え方)。
+-- 位置の差が FarmerMaxPlausibleSpeed を超えたときは、テレポート(やり直しで位置が戻る、など)とみなして、位置の差のほうは使わない。
+-- dt は、時間の長さの上限をかける前の、実際の長さ(上限をかけると、重いフレームで、速さを大きく見積もってしまう)
+local function horizontalSpeed(entry: AnimEntry, root: BasePart, dt: number): number
 	local velocity = root.AssemblyLinearVelocity
-	return math.sqrt(velocity.X * velocity.X + velocity.Z * velocity.Z)
+	local velocitySpeed = math.sqrt(velocity.X * velocity.X + velocity.Z * velocity.Z)
+
+	local position = root.Position
+	local previous = entry.PrevPosition
+	entry.PrevPosition = position
+	if previous == nil then
+		return velocitySpeed
+	end
+	local dx = position.X - previous.X
+	local dz = position.Z - previous.Z
+	local movedSpeed = math.sqrt(dx * dx + dz * dz) / math.max(dt, MIN_POSITIVE)
+	if movedSpeed > Config.FarmerMaxPlausibleSpeed then
+		return velocitySpeed -- テレポートなどで、ありえない大きさ。位置の差は無視する
+	end
+	return math.max(velocitySpeed, movedSpeed)
 end
 
 -- 歩きの度合いと位相を進める。止まっているとき(遅いとき)は、位相は進めない
@@ -296,19 +316,22 @@ local function resetTail(entry: AnimEntry)
 end
 
 -- キャラクター1体を1フレーム分動かす。壊れた状態なら、何もしない
-local function updateEntry(entry: AnimEntry, t: number, dt: number)
+-- dt は動きの計算に使う(上限つき)、realDt は位置の差から速さを求めるのに使う(実際の長さ)
+local function updateEntry(entry: AnimEntry, t: number, dt: number, realDt: number)
 	if entry.Character:GetAttribute(HIDDEN_ATTRIBUTE) == true then
+		entry.PrevPosition = nil -- 潜っている間は位置を追わない(浮上した次のフレームを、位置の飛びと間違えないように)
 		resetTail(entry) -- 潜っているときは、足などの姿勢は保つが、しっぽはまっすぐに戻す
 		return
 	end
 	local root = getRoot(entry)
 	if not root then
+		entry.PrevPosition = nil
 		return
 	end
 	if entry.Dirty then
 		rebuildJoints(entry)
 	end
-	advance(entry, horizontalSpeed(root), dt)
+	advance(entry, horizontalSpeed(entry, root, realDt), dt)
 	animateLegs(entry)
 	animateClaws(entry, t)
 	animateAntennae(entry, t)
@@ -323,7 +346,7 @@ local function onRenderStepped(dt: number)
 		if not visual.Parent or not entry.Character.Parent then
 			removeEntry(visual) -- 表の書き換え中の削除は、Luau では許される
 		else
-			updateEntry(entry, t, clamped)
+			updateEntry(entry, t, clamped, dt)
 		end
 	end
 end

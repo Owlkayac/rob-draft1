@@ -2,6 +2,7 @@
 -- 餌(エサ)を田んぼに置いて、食べる判定をサーバーで行う部品。仕様書 012 の 1。
 -- 餌は図形(橙色の丸)だけで作る。外部の素材は使わない。
 -- 上下のゆれは、通信が増えるので作らない(仕様書では任意)。
+-- 仕様書 016:農家さんのラウンドでは、餌を置かない(0個。「もう一度」のときも)。ザリガニのラウンドは、これまでどおり FoodCount 個。
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -13,6 +14,7 @@ local FieldService = require(script.Parent.FieldService)
 local WarnOnce = require(script.Parent.Enemy.WarnOnce)
 local RoundService = require(script.Parent.RoundService)
 local ScoreService = require(script.Parent.ScoreService)
+local SetupService = require(script.Parent.SetupService)
 
 local FOLDER_NAME = "Food"
 
@@ -136,12 +138,25 @@ local function scheduleRespawn()
 	end)
 end
 
--- 全部を置き直す(「もう一度」のとき)
+-- 農家さんのラウンドを遊んでいる人がいるか(やくわりが農家さんで、フェーズが Playing)。
+-- メニューにいる間は、前のやくわりが残っていても、数えない(メニューのあと、ザリガニで始めても餌がある)
+local function isFarmerRoundActive(): boolean
+	for _, player in Players:GetPlayers() do
+		if SetupService.GetPhase(player) == "Playing" and SetupService.GetRole(player) == "Farmer" then
+			return true
+		end
+	end
+	return false
+end
+
+-- 全部を置き直す(スタート・「もう一度」・メニューへ戻るとき)。農家さんのラウンドでは、置かない(0個)
 local function resetFoods()
 	generation += 1
 	pendingRespawns = 0
 	clearFoods()
-	fillFoods(0)
+	if not isFarmerRoundActive() then
+		fillFoods(0)
+	end
 end
 
 -- プレイヤーの横方向の位置。キャラクターが無いなど、分からないときは nil

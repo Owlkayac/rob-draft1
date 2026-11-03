@@ -9,6 +9,9 @@
 --   3. 噴射の間、カメラの視野(FieldOfView)を少し広げる(自分の端末だけ)。
 --   4. 画面の下に、「ジェット: じゅんびOK」などの小さな表示を出す(0.1秒ごとに更新)。
 -- 毎フレームの処理は、噴射中の Move だけ。ほかは、イベントと 0.1秒ごとの更新。
+-- 仕様書 016:やくわりが農家さん(Player の Attribute "Role" が "Farmer")のときは、ジェットしないので、
+--   画面のボタン・キー・下の表示(JetGui)を出さない(取り外す・隠す)。ザリガニに戻ったら、また出す。サーバーも、農家さんの要求は無視する。
+--   スタートメニューの間(RoundState が "Menu")も、同じく、ボタン・キー・表示を出さない(メニューの上に、ボタンが残らないように)。
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
@@ -29,6 +32,9 @@ local READY_TIME_ATTRIBUTE = "JetReadyTime" -- 使えるようになる時刻(�
 local MOVE_INPUT_MIN = 0.1 -- 動かしている向きの水平の大きさが、これより大きければ「動かしている」とみなす
 local LOOK_MIN = 0.001 -- 向いている向きの水平の大きさの下限(真上を向いているときの、0 の向きを避ける)
 local MIN_POSITIVE = 0.001 -- 割り算の下の数がこれより小さくならないようにする下限
+local ROLE_ATTRIBUTE = "Role" -- SetupService が Player につける「やくわり」
+local ROLE_FARMER = "Farmer"
+local STATE_MENU = "Menu" -- スタートメニューの間(RoundState)
 
 -- 画面の表示(文言・色・大きさ・位置)
 local GUI_NAME = "JetGui"
@@ -52,6 +58,34 @@ local moveHumanoid: Humanoid? = nil
 local fovTween: Tween? = nil
 local fovBase: number? = nil -- 噴射の直前の視野(戻す先)
 local pressedDirection: Vector3? = nil -- 押した瞬間の、動かしている向き(水平で長さ 1)。止まっていたら nil。噴射が終わったら消す
+local actionBound = false -- いま操作(キー・ボタン)を取り付けているか
+local inMenuState = true -- いまスタートメニューの間か(最初の知らせが届くまでは、メニューと同じ扱い)
+local jetScreenGui: ScreenGui? = nil -- 画面の下の表示を入れている ScreenGui
+local refreshBindingHook: (() -> ())? = nil -- 操作の取り付け・取り外しをやり直す関数(Start が入れる。メニューの出入りで呼ぶ)
+
+-- いまのやくわりが農家さんか
+local function isFarmerRole(): boolean
+	return Players.LocalPlayer:GetAttribute(ROLE_ATTRIBUTE) == ROLE_FARMER
+end
+
+-- 画面の下の表示を出すか隠すか:メニューの間と、農家さんのときは隠す
+local function refreshGuiEnabled()
+	local screenGui = jetScreenGui
+	if screenGui ~= nil then
+		screenGui.Enabled = (not inMenuState) and (not isFarmerRole())
+	end
+end
+
+-- メニューの出入りや、やくわりの変化のあと、操作(キー・ボタン)と表示を、いまの状態に合わせ直す。
+-- 操作の関数がまだ用意できていなければ(Start の途中)、表示だけ合わせる
+local function refreshAll()
+	local hook = refreshBindingHook
+	if hook ~= nil then
+		hook()
+	else
+		refreshGuiEnabled()
+	end
+end
 
 -- 水平の成分だけを取り出して、長さ 1 にする。大きさが minLength 以下なら nil
 local function horizontalUnit(vector: Vector3, minLength: number): Vector3?
@@ -282,6 +316,25 @@ local function updateLabel(label: TextLabel, character: Model?)
 	end
 end
 
+-- スタートメニューの間(RoundState が "Menu"。仕様書 015)は、画面の下の表示を隠す。
+-- 最初の知らせが届くまでは隠しておく。RoundState が見つからないときは、これまでどおり出す(農家さんのときは、隠したまま)
+local function watchMenuState()
+	refreshAll()
+	local found = ReplicatedStorage:WaitForChild(Config.RoundStateRemoteName, Config.JetWaitSeconds)
+	if not found or not found:IsA("RemoteEvent") then
+		inMenuState = false
+		refreshAll()
+		return
+	end
+	found.OnClientEvent:Connect(function(state: unknown, _stageName: unknown, _remaining: unknown)
+		if typeof(state) ~= "string" then
+			return
+		end
+		inMenuState = (state == STATE_MENU)
+		refreshAll() -- メニューに入ったら、操作を取り外す。出たら、やくわりに合わせて、また取り付ける
+	end)
+end
+
 -- 0.1秒ごとに表示を更新するループを始める
 local function startLabelLoop(label: TextLabel)
 	task.spawn(function()
@@ -317,8 +370,23 @@ function JetController.Start()
 		end
 		return Enum.ContextActionResult.Sink
 	end
-	ContextActionService:BindAction(ACTION_NAME, handle, true, Enum.KeyCode.Q)
-	ContextActionService:SetTitle(ACTION_NAME, BUTTON_TITLE)
+	-- やくわりに合わせて、操作(キー・画面のボタン)を取り付ける・取り外す(二重に取り付けない)
+	local function refreshBinding()
+		local shouldBind = (not isFarmerRole()) and (not inMenuState) -- 農家さんのときと、メニューの間は、取り付けない
+		if shouldBind ~= actionBound then
+			actionBound = shouldBind
+			if shouldBind then
+				ContextActionService:BindAction(ACTION_NAME, handle, true, Enum.KeyCode.Q)
+				ContextActionService:SetTitle(ACTION_NAME, BUTTON_TITLE)
+			else
+				ContextActionService:UnbindAction(ACTION_NAME) -- 画面のボタンも消える
+			end
+		end
+		refreshGuiEnabled()
+	end
+	refreshBindingHook = refreshBinding
+	refreshBinding()
+	Players.LocalPlayer:GetAttributeChangedSignal(ROLE_ATTRIBUTE):Connect(refreshBinding)
 
 	local player = Players.LocalPlayer
 	player.CharacterAdded:Connect(watchCharacter)
@@ -327,7 +395,13 @@ function JetController.Start()
 		watchCharacter(existing)
 	end
 
-	startLabelLoop(buildGui())
+	local label = buildGui()
+	startLabelLoop(label)
+	local screenGui = label.Parent
+	if screenGui ~= nil and screenGui:IsA("ScreenGui") then
+		jetScreenGui = screenGui
+		task.spawn(watchMenuState)
+	end
 end
 
 return JetController

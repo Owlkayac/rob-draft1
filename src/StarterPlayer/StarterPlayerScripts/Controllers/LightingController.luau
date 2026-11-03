@@ -4,6 +4,7 @@
 -- サーバーの Lighting は変えない。新しい通信も足さない。
 
 local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -16,6 +17,8 @@ local COLOR_CORRECTION_NAME = "FieldColorCorrection"
 local BLOOM_NAME = "FieldBloom"
 local SUN_RAYS_NAME = "FieldSunRays"
 local NOON_PROGRESS = 0.5 -- 「昼」にあたる進み具合
+local ROLE_ATTRIBUTE = "Role" -- SetupService が Player につける「やくわり」
+local ROLE_FARMER = "Farmer"
 
 -- 効果の部品の組(まとめて持つ)
 type Effects = {
@@ -235,6 +238,11 @@ local function onRender(parts: Effects, dt: number)
 	applyAll(parts, math.clamp(shownProgress, 0, 1))
 end
 
+-- いまのやくわりが農家さんか
+local function isFarmerRole(): boolean
+	return Players.LocalPlayer:GetAttribute(ROLE_ATTRIBUTE) == ROLE_FARMER
+end
+
 -- RoundState を受け取って、目標の進み具合を決める
 local function onRoundState(state: unknown, _stageName: unknown, remaining: unknown)
 	if typeof(state) ~= "string" or typeof(remaining) ~= "number" then
@@ -243,8 +251,13 @@ local function onRoundState(state: unknown, _stageName: unknown, remaining: unkn
 	if state == "Caught" then
 		return -- 捕まった時点の進み具合のまま、変えない
 	end
+	if state == "Cleared" and isFarmerRole() then
+		return -- 農家さんのクリアは、ぜんぶつかまえて途中で終わること。夕方へジャンプせず、いまの進み具合のまま(Caught と同じ)
+	end
 	local newTarget = 1
-	if state ~= "Cleared" then
+	if state == "Menu" then
+		newTarget = 0 -- スタートメニューの間は、朝(新しいラウンドと同じ。Caught から戻るときは、速く戻る)
+	elseif state ~= "Cleared" then
 		newTarget = math.clamp(1 - remaining / Config.RoundSeconds, 0, 1)
 	end
 	if newTarget < targetProgress - Config.LightResetDropThreshold then
