@@ -1,6 +1,7 @@
 --!strict
 -- 農家さんの「見た目」だけを作る部品。動きの判断は EnemyService が行う。(仕様書 002)
 -- 外部の素材は使わず、Roblox 標準の人型(R15)と、図形の麦わら帽子で作る。
+-- 大きさは Config.FarmerScale 倍(仕様書 002 の 8)。足元の高さの補正もここ(PlaceAt)。帽子の大きさの数字は「標準サイズ基準」。
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -45,22 +46,25 @@ local function makeDisc(name: string, height: number, diameter: number, head: Ba
 	return part
 end
 
--- 麦わら帽子(つば+山)を頭につける
-local function attachHat(model: Model)
+-- 麦わら帽子(つば+山)を頭につける。scale は、モデルがいま何倍の大きさか(帽子も同じ倍率にする)。
+-- 大きくしたあとで、実際の頭の大きさを見てつけるので、ずれない
+local function attachHat(model: Model, scale: number)
 	local head = model:FindFirstChild("Head")
 	if not head or not head:IsA("BasePart") then
 		warn("[FarmerModel] Head が見つからないので、帽子をつけられません")
 		return
 	end
 	local headTop = head.Size.Y / 2
-	local brimThickness = Config.FarmerHatBrimThickness
-	local crownHeight = Config.FarmerHatCrownHeight
+	local brimThickness = Config.FarmerHatBrimThickness * scale
+	local crownHeight = Config.FarmerHatCrownHeight * scale
+	local brimDiameter = Config.FarmerHatBrimDiameter * scale
+	local crownDiameter = Config.FarmerHatCrownDiameter * scale
 
 	-- つば:頭のてっぺんの上に、うすく広く
-	local brim = makeDisc("HatBrim", brimThickness, Config.FarmerHatBrimDiameter, head, headTop + brimThickness / 2)
+	local brim = makeDisc("HatBrim", brimThickness, brimDiameter, head, headTop + brimThickness / 2)
 	brim.Parent = model
 	-- 山:つばの上に、少し細く高く
-	local crown = makeDisc("HatCrown", crownHeight, Config.FarmerHatCrownDiameter, head, headTop + brimThickness + crownHeight / 2)
+	local crown = makeDisc("HatCrown", crownHeight, crownDiameter, head, headTop + brimThickness + crownHeight / 2)
 	crown.Parent = model
 end
 
@@ -86,13 +90,14 @@ end
 
 -- 人型の作成に失敗したときの代わり:Part だけで作る簡易な人型
 -- (Humanoid、HumanoidRootPart、頭、胴を WeldConstraint でつなぎ、帽子は attachHat でつける)
-local function createFallback(): Model
+-- scale 倍の大きさで、最初から作る(あとから ScaleTo で大きくはしない)
+local function createFallback(scale: number): Model
 	local model = Instance.new("Model")
 	model.Name = "Farmer"
 
-	local rootSize = Config.FarmerFallbackRootSize
-	local torsoSize = Config.FarmerFallbackTorsoSize
-	local headSize = Config.FarmerFallbackHeadSize
+	local rootSize = Config.FarmerFallbackRootSize * scale
+	local torsoSize = Config.FarmerFallbackTorsoSize * scale
+	local headSize = Config.FarmerFallbackHeadSize * scale
 
 	-- HumanoidRootPart:見えない、動きの中心。原点に置く(あとで PivotTo で動かす)
 	local root = makeBodyPart("HumanoidRootPart", rootSize, Config.FarmerClothesColor)
@@ -122,6 +127,7 @@ local function createFallback(): Model
 	-- 足の裏(胴の底)が地面につくように、HipHeight を決める。
 	-- Humanoid は「地面から HipHeight + 根っこの高さの半分」の位置に根っこを置く
 	humanoid.HipHeight = torsoSize.Y / 2 - rootSize.Y / 2
+	humanoid.RequiresNeck = false -- 簡易モデルには首の関節(Neck)がないので、首が無くても倒れないようにする
 	humanoid.Parent = model
 	return model
 end
@@ -145,17 +151,40 @@ local function tryCreateHumanoid(): Model?
 	return nil
 end
 
+-- モデルを Config.FarmerScale 倍にする。戻り値は、実際の倍率(失敗したら 1)
+local function scaleModel(model: Model): number
+	local ok, err = pcall(function()
+		model:ScaleTo(Config.FarmerScale)
+	end)
+	if not ok then
+		warn(`[FarmerModel] 大きくできませんでした(標準の大きさのままにします): {err}`)
+		return 1
+	end
+	local readOk, scale = pcall(function()
+		return model:GetScale()
+	end)
+	if readOk and type(scale) == "number" and scale > 0 then
+		return scale
+	end
+	return Config.FarmerScale
+end
+
 -- 農家さんのモデルを作って返す(Workspace にはまだ入れない)。
+-- 戻り値は (モデル, 実際に使われた倍率)。大きくするのに失敗したときは、倍率が 1 になる。
 -- 人型の作成は、通信で待つことがある(その間、この関数は止まる)。
--- 何回やっても失敗したら、Part だけの簡易モデルを返す(必ずモデルが返る)
-function FarmerModel.Create(): Model
+-- 何回やっても失敗したら、Part だけの簡易モデルを返す(必ずモデルが返る)。
+-- 大きさは、できれば Config.FarmerScale 倍。
+function FarmerModel.Create(): (Model, number)
 	local model: Model
+	local scale: number
 	local created = tryCreateHumanoid()
 	if created then
 		model = created
+		scale = scaleModel(model)
 	else
 		warn("[FarmerModel] 人型を作れなかったので、Part だけの簡易モデルを使います")
-		model = createFallback()
+		scale = Config.FarmerScale
+		model = createFallback(scale)
 	end
 	model.Name = "Farmer"
 
@@ -164,8 +193,27 @@ function FarmerModel.Create(): Model
 		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None -- 名前を表示しない
 		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff -- 体力バーも出さない
 	end
-	attachHat(model)
-	return model
+	attachHat(model, scale) -- 大きくしたあとで、同じ倍率の帽子をつける
+	return model, scale
+end
+
+-- 「足元の高さ(ワールドのY)」を返す。モデル全体を囲む箱(バウンディングボックス)の底の高さ。
+-- 箱の中心の y から、箱の高さの半分を引いて求める。
+-- 人型の根っこ(HumanoidRootPart)は足より上にあるので、根っこの位置ではなく、この値を使う
+function FarmerModel.GetFootY(model: Model): number
+	local boxCFrame, boxSize = model:GetBoundingBox()
+	return boxCFrame.Position.Y - boxSize.Y / 2
+end
+
+-- モデルを point の横位置(X, Z)に置き、足元が「ゆか上面 + 余裕」の高さになるように補正する。
+-- 足元の高さは GetFootY(箱の底)で求めるので、大きさが変わっても、めり込まず、浮かない。
+-- Workspace に入れる前でも後でも呼べる
+function FarmerModel.PlaceAt(model: Model, point: Vector3)
+	local targetFootY = Config.FieldFloorTopY + Config.FarmerSpawnMargin
+	local current = model:GetPivot()
+	model:PivotTo(CFrame.new(point.X, current.Position.Y, point.Z)) -- まず横位置だけ合わせる
+	local diff = targetFootY - FarmerModel.GetFootY(model)
+	model:PivotTo(model:GetPivot() + Vector3.new(0, diff, 0)) -- 次に、高さだけを足りない分ずらす
 end
 
 -- 動きの計算をサーバーが持つようにする(Workspace に入れたあとで呼ぶ)

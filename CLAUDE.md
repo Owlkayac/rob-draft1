@@ -14,7 +14,8 @@ default.project.json   Rojo(同期ツール)の設定。Studioとコードをつ
 src/
   ReplicatedStorage/Shared/       サーバーとクライアントの両方が使う部品(設定値など)
   ServerScriptService/            サーバー側のスクリプト(判定・保存・課金)
-    Services/                     機能ごとのまとまり(例:データ保存、ショップ)
+    Services/                     機能ごとのまとまり(例:ザリガニ、田んぼ、ラウンド、天敵)
+      Enemy/                      天敵の部品(行動、数字の補正、種類ごとの定義。足し方は docs/design/enemy-architecture.md)
   ServerStorage/Modules/          サーバー専用の部品
   StarterPlayer/StarterPlayerScripts/   クライアント側のスクリプト(画面・操作)
     Controllers/                  画面ごとの操作のまとまり
@@ -27,6 +28,7 @@ docs/
   game-concept.md   ゲームの企画書(まずここを埋める)
   specs/            機能ごとの仕様書(_template.md を複製して使う)
   decisions/        決めたことの記録(なぜそうしたか)
+  design/           設計の説明(拡張のしかたなど。初心者向け)
   playtest/         遊んでみた記録(誰が、どこで迷ったか、継続率など)
   marketing/        公開と宣伝の計画
     video-scripts/  縦動画の台本

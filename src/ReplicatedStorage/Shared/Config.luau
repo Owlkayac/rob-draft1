@@ -43,18 +43,23 @@ local Config = {
 	RestartRequestMinInterval = 1, -- 「もう一度」の受け付け間隔の最小値(秒)
 
 	-- 天敵「農家さん」(仕様書 002)。数字は仮の初期値で、遊びながら調整する。
-	FarmerWalkSpeed = 12, -- 見回り中の速さ
-	FarmerChaseSpeed = 15, -- 追跡中の速さ(ザリガニの歩く速さ16より少し遅い)
-	FarmerSightDistance = 30, -- 発見できる距離(稲の成長で倍率がかかる)
-	FarmerCatchDistance = 4, -- 捕まえる距離
+	-- 「距離」の数字は「標準サイズ(倍率1.0)基準」。実際に使うときは × FarmerScale する(仕様書 002 の 8)
+	FarmerScale = 2.5, -- 農家さんの大きさの倍率(標準の人型の何倍か)
+	FarmerSpeedMultiplier = 1.0, -- 歩く速さにかける倍率。大きさに比例させると追いつけなくなるので、いまは 1.0
+	FarmerWalkSpeed = 12, -- 見回り中の速さ(× FarmerSpeedMultiplier)
+	FarmerChaseSpeed = 15, -- 追跡中の速さ。ザリガニの歩く速さ16より少し遅い(× FarmerSpeedMultiplier)
+	FarmerSightDistance = 30, -- 発見できる距離。大きさの倍率はかけない(稲の成長で倍率がかかる)
+	FarmerCatchDistance = 4, -- 捕まえる距離(潜っていないとき。標準サイズ基準)
+	FarmerCatchHiddenDistance = 2, -- 捕まえる距離(潜っているとき。標準サイズ基準。仕様書 002 の 9)
 	FarmerLoseSightSeconds = 4, -- 見失ってから、見回りに戻るまでの時間(秒)
 	FarmerSearchSeconds = 3, -- 潜った場所を探す時間(秒)
+	FarmerSpawnMargin = 0.2, -- 出現位置の高さの余裕(ゆかにめり込まないように、少しだけ上に置く)
 	EnemyTickSeconds = 0.2, -- 動きの判断をする間隔(秒)
 	EnemyRepathSeconds = 0.5, -- 経路を作り直す間隔(秒)
-	PatrolArriveDistance = 4, -- 見回り地点などに「着いた」とみなす距離
-	WaypointReachDistance = 3, -- 経路の途中の点に「着いた」とみなす距離
-	PathAgentRadius = 2, -- 経路探索で使う、体の半径
-	PathAgentHeight = 5, -- 経路探索で使う、体の高さ
+	PatrolArriveDistance = 4, -- 見回り地点などに「着いた」とみなす距離(標準サイズ基準)
+	WaypointReachDistance = 3, -- 経路の途中の点に「着いた」とみなす距離(標準サイズ基準)
+	PathAgentRadius = 2, -- 経路探索で使う、体の半径(標準サイズ基準)
+	PathAgentHeight = 5, -- 経路探索で使う、体の高さ(標準サイズ基準)
 
 	-- 農家さんの見た目(外部素材は使わず、色と図形だけ)
 	FarmerSkinColor = Color3.fromRGB(224, 172, 105), -- 肌

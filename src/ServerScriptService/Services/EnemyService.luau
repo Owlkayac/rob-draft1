@@ -1,330 +1,74 @@
 --!strict
--- 天敵「農家さん」の動きの頭脳。仕様書 002。
--- 状態: Patrol(見回り)/ Chase(追跡)/ Search(探す)。
--- 捕獲は状態ではなく、追跡中の判定。見た目は FarmerModel(別ファイル)が担当する。
+-- 天敵の「全体の進行役」。仕様書 002。
+-- やることは、天敵を出す(spawn)・動きのループを1つ回す・やり直しに対応する、だけ。
+-- 具体的な中身は Enemy フォルダの部品が担当する(くわしくは docs/design/enemy-architecture.md):
+--   Perception(見る・捕まえる判定)、Movement(歩く)、Behaviors(行動)、Definitions(天敵の種類)。
 -- 動きと捕獲の判定は、すべてサーバーで行う。
 
-local PathfindingService = game:GetService("PathfindingService")
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerStorage = game:GetService("ServerStorage")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.Shared.Config)
-local CrayfishService = require(script.Parent.CrayfishService)
 local FieldService = require(script.Parent.FieldService)
 local RoundService = require(script.Parent.RoundService)
+local Types = require(script.Parent.Enemy.Types)
+local Perception = require(script.Parent.Enemy.Perception)
+local WarnOnce = require(script.Parent.Enemy.WarnOnce)
+local Movement = require(script.Parent.Enemy.Movement)
+local Farmer = require(script.Parent.Enemy.Definitions.Farmer)
 
--- 見た目の部品は ServerStorage/Modules にある(Rojo の対応は default.project.json)
-local modulesFolder = ServerStorage:WaitForChild("Modules", 10)
-assert(modulesFolder, "[EnemyService] ServerStorage/Modules が見つかりません")
-local farmerModelScript = modulesFolder:WaitForChild("FarmerModel", 10)
-assert(farmerModelScript, "[EnemyService] FarmerModel が見つかりません")
-local FarmerModel = require(farmerModelScript :: ModuleScript)
-
-type StateName = "Patrol" | "Chase" | "Search"
-
--- 見える相手1人ぶんの情報
-type Target = {
-	Player: Player,
-	Position: Vector3,
-	Distance: number, -- 横方向(XZ)の距離
+-- ===== 天敵の種類の一覧 =====
+-- 新しい種類(サギなど)は、Enemy/Definitions にファイルを作って、ここに足すだけ。
+local definitions: { Types.Definition } = {
+	Farmer,
 }
 
--- 農家さんの体の部品(毎回、存在を確認して取り出す)
-type Parts = {
-	Model: Model,
-	Humanoid: Humanoid,
-	Root: BasePart,
+-- 天敵1体ぶんの「置き場」。作り直しても、置き場は同じものを使う
+type Slot = {
+	Definition: Types.Definition,
+	SpawnIndex: number, -- 出現位置にした見回り地点の番号
+	Ctx: Types.Context?, -- いまの天敵の状態(まだ作れていなければ nil)
+	Spawning: boolean, -- 作っている最中か(二重に作らないための印)
 }
 
 local EnemyService = {}
 
--- 農家さん本体
-local farmer: Model? = nil
-local spawnPosition = Vector3.zero -- 出現位置(やり直しで戻す場所)
-local spawnIndex = 1 -- 出現位置にした見回り地点の番号
+local slots: { Slot } = {} -- 天敵ごとの状態の表
 local patrolPoints: { Vector3 } = {}
 local started = false
-local spawning = false -- 農家さんを作っている最中か(二重に作らないための印)
 -- 動きのループの番号。新しいループを始めるたびに増やし、古いループは自分で終わる
 local loopToken = 0
 local loopRunning = false -- いま動きのループが動いているか
 
--- 状態と、追跡の記憶
-local state: StateName = "Patrol"
-local patrolIndex = 1
-local chasePlayer: Player? = nil -- 追っている相手
-local lastSeenPosition: Vector3? = nil -- 最後に見えた位置
-local lostSightSince: number? = nil -- 見えなくなった時刻(os.clock)
-local searchEndAt = 0 -- 探し終わる時刻(os.clock)
+-- ===== 行動の切り替え =====
 
--- 経路(Path)の記憶
-local waypoints: { PathWaypoint } = {}
-local waypointIndex = 1
-local lastPathAt = -math.huge -- 最後に経路を作った時刻
--- やり直しや状態変更で、古い経路計算の結果を捨てるための番号
-local generation = 0
-
--- 横方向(XZ)だけの距離。高さの違いは無視する
-local function flatDistance(a: Vector3, b: Vector3): number
-	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
-end
-
--- 農家さんの体を取り出す。壊れていたり、倒れていたら nil
-local function getParts(): Parts?
-	local model = farmer
-	if not model or not model.Parent then
-		return nil
-	end
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	local root = model:FindFirstChild("HumanoidRootPart")
-	if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
-		return nil
-	end
-	return { Model = model, Humanoid = humanoid, Root = root }
-end
-
--- 経路の記憶を消す(次の移動で作り直す)
-local function clearPath()
-	generation += 1
-	waypoints = {}
-	waypointIndex = 1
-	lastPathAt = -math.huge
-end
-
--- その場で止まる
-local function stopMoving(parts: Parts)
-	parts.Humanoid:MoveTo(parts.Root.Position)
-end
-
--- 生きているプレイヤーの HumanoidRootPart を返す(遊んでいない・倒れている人は nil)
-local function getPlayingRoot(player: Player): BasePart?
-	if not RoundService.IsPlaying(player) then
-		return nil
-	end
-	local character = player.Character
-	if not character then
-		return nil
-	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
-		return nil
-	end
-	return root
-end
-
--- 「いちばん近い、見える相手」を探す。
--- 戻り値: (見える相手 or nil, 遊んでいる人が1人でもいるか)
-local function scanPlayers(fromPosition: Vector3): (Target?, boolean)
-	local best: Target? = nil
-	local anyPlaying = false
-	for _, player in Players:GetPlayers() do
-		local root = getPlayingRoot(player)
-		if root then
-			anyPlaying = true
-			local distance = flatDistance(fromPosition, root.Position)
-			local sight = Config.FarmerSightDistance * RoundService.GetSightMultiplier(player)
-			local visible = distance <= sight and not CrayfishService.IsHidden(player)
-			if visible and (best == nil or distance < best.Distance) then
-				best = { Player = player, Position = root.Position, Distance = distance }
-			end
-		end
-	end
-	return best, anyPlaying
-end
-
--- 目的地へ向かって歩く。EnemyRepathSeconds ごとに経路を作り直し、
--- 作れなければ、目的地へ直接 MoveTo する。(この関数は止まることがある)
-local function walkTo(parts: Parts, destination: Vector3)
-	local now = os.clock()
-	if now - lastPathAt >= Config.EnemyRepathSeconds then
-		lastPathAt = now
-		local myGeneration = generation
-		local path = PathfindingService:CreatePath({
-			AgentRadius = Config.PathAgentRadius,
-			AgentHeight = Config.PathAgentHeight,
-			AgentCanJump = false,
-		})
-		local ok = pcall(function()
-			path:ComputeAsync(parts.Root.Position, destination)
-		end)
-		-- 待っている間に、やり直しや状態変更・破壊があったら、結果を捨てる
-		if myGeneration ~= generation or not parts.Root.Parent then
+-- 行動を切り替える。いまの行動の Exit → 新しい行動の Enter の順に呼ぶ。
+-- 同じ名前への切り替えも、やり直しとして行う
+local function switchBehavior(ctx: Types.Context, name: string)
+	local definition = ctx.Definition
+	local nextName = name
+	local nextBehavior = definition.Behaviors[nextName]
+	if not nextBehavior then
+		WarnOnce.Warn(
+			`behavior:{definition.Name}:{name}`,
+			`[EnemyService] 行動 {name} が {definition.Name} にありません。最初の行動に戻します`
+		)
+		nextName = definition.InitialBehavior
+		nextBehavior = definition.Behaviors[nextName]
+		if not nextBehavior then
 			return
 		end
-		if ok and path.Status == Enum.PathStatus.Success then
-			waypoints = path:GetWaypoints()
-		else
-			waypoints = {} -- 経路が作れなかった:直接向かう
-		end
-		waypointIndex = 1
 	end
-
-	-- 着いた点は飛ばして、次の点へ向かう
-	local rootPosition = parts.Root.Position
-	while waypointIndex <= #waypoints
-		and flatDistance(rootPosition, waypoints[waypointIndex].Position) <= Config.WaypointReachDistance do
-		waypointIndex += 1
+	local current = definition.Behaviors[ctx.BehaviorName]
+	if current then
+		current.Exit(ctx)
 	end
-	if waypointIndex <= #waypoints then
-		parts.Humanoid:MoveTo(waypoints[waypointIndex].Position)
-	else
-		parts.Humanoid:MoveTo(destination)
-	end
+	ctx.BehaviorName = nextName
+	ctx.SwitchCount += 1
+	nextBehavior.Enter(ctx)
 end
 
--- ===== 状態の切り替え =====
-
--- いちばん近い見回り地点の番号
-local function nearestPatrolIndex(position: Vector3): number
-	local bestIndex = 1
-	local bestDistance = math.huge
-	for index, point in patrolPoints do
-		local distance = flatDistance(position, point)
-		if distance < bestDistance then
-			bestDistance = distance
-			bestIndex = index
-		end
-	end
-	return bestIndex
-end
-
-local function enterPatrol(parts: Parts)
-	state = "Patrol"
-	parts.Humanoid.WalkSpeed = Config.FarmerWalkSpeed
-	chasePlayer = nil
-	lastSeenPosition = nil
-	lostSightSince = nil
-	patrolIndex = nearestPatrolIndex(parts.Root.Position)
-	clearPath()
-end
-
-local function enterChase(parts: Parts, target: Target)
-	state = "Chase"
-	parts.Humanoid.WalkSpeed = Config.FarmerChaseSpeed
-	chasePlayer = target.Player
-	lastSeenPosition = target.Position
-	lostSightSince = nil
-	clearPath()
-end
-
-local function enterSearch(parts: Parts)
-	state = "Search"
-	parts.Humanoid.WalkSpeed = Config.FarmerWalkSpeed
-	searchEndAt = os.clock() + Config.FarmerSearchSeconds
-	lostSightSince = nil
-	clearPath()
-	stopMoving(parts) -- 歩き回らず、その場で探す
-end
-
--- ===== 状態ごとの1回ぶんの判断 =====
-
-local function updatePatrol(parts: Parts, target: Target?, anyPlaying: boolean)
-	if target then
-		enterChase(parts, target)
-		return
-	end
-	if not anyPlaying then
-		stopMoving(parts) -- 遊んでいる人がいない間は、その場で止まる
-		return
-	end
-	local point = patrolPoints[patrolIndex]
-	if flatDistance(parts.Root.Position, point) <= Config.PatrolArriveDistance then
-		patrolIndex = patrolIndex % #patrolPoints + 1 -- 次の地点へ(順番に回る)
-		clearPath()
-		point = patrolPoints[patrolIndex]
-	end
-	walkTo(parts, point)
-end
-
--- 見えなくなっているときの追跡(潜った・遠くへ離れた・いなくなった)
-local function updateChaseLost(parts: Parts)
-	local now = os.clock()
-	local since = lostSightSince
-	if since == nil then
-		since = now
-		lostSightSince = now
-	end
-	local lastSeen = lastSeenPosition
-	if now - since >= Config.FarmerLoseSightSeconds or lastSeen == nil then
-		enterPatrol(parts)
-		return
-	end
-	local diver = chasePlayer
-	local arrived = flatDistance(parts.Root.Position, lastSeen) <= Config.PatrolArriveDistance
-	if diver and CrayfishService.IsHidden(diver) and arrived then
-		enterSearch(parts) -- 潜った場所に着いたので、探す
-		return
-	end
-	if arrived then
-		stopMoving(parts)
-		return
-	end
-	walkTo(parts, lastSeen)
-end
-
-local function updateChase(parts: Parts, target: Target?)
-	if not target then
-		updateChaseLost(parts)
-		return
-	end
-	chasePlayer = target.Player
-	lastSeenPosition = target.Position
-	lostSightSince = nil
-	-- 捕獲の判定。この時点で target は「潜っていない」ことが確定している
-	if target.Distance <= Config.FarmerCatchDistance then
-		RoundService.NotifyCaught(target.Player)
-		stopMoving(parts)
-		enterPatrol(parts)
-		return
-	end
-	walkTo(parts, target.Position)
-end
-
-local function updateSearch(parts: Parts, target: Target?)
-	if target then
-		enterChase(parts, target) -- 探している間に見つけた
-		return
-	end
-	if os.clock() >= searchEndAt then
-		enterPatrol(parts)
-		return
-	end
-	stopMoving(parts)
-end
-
--- 判断1回ぶん(組み込みの tick() と名前が重ならないよう think)。農家さんがいなくなったら false(ループを終える)
-local function think(): boolean
-	local parts = getParts()
-	if not parts then
-		return false
-	end
-	local target, anyPlaying = scanPlayers(parts.Root.Position)
-	if state == "Patrol" then
-		updatePatrol(parts, target, anyPlaying)
-	elseif state == "Chase" then
-		updateChase(parts, target)
-	else
-		updateSearch(parts, target)
-	end
-	return true
-end
-
--- 出現位置:見回り地点のうち、スタート地点(南端)からいちばん遠いもの
-local function chooseSpawn()
-	local startPosition = Vector3.new(0, 0, Config.FieldSize / 2 - Config.SpawnEdgeOffset)
-	local farthest = 0
-	for index, point in patrolPoints do
-		local distance = flatDistance(point, startPosition)
-		if distance > farthest then
-			farthest = distance
-			spawnIndex = index
-		end
-	end
-	spawnPosition = patrolPoints[spawnIndex]
-end
+-- ===== 天敵を作る =====
 
 -- Enemies フォルダを返す(なければ作る)
 local function getEnemiesFolder(): Instance
@@ -338,40 +82,154 @@ local function getEnemiesFolder(): Instance
 	return newFolder
 end
 
--- 農家さんを「作る」処理(動きのループは始めない)。成功したら true。
--- 古い農家さんが残っていたら片づける。人型の作成は待ちが入る
-local function spawnFarmer(): boolean
-	if spawning then
-		return false
+-- 最初の出現位置の番号:見回り地点のうち、スタート地点(南端)からいちばん遠いもの
+local function findFarthestPatrolIndex(): number
+	local startPosition = Vector3.new(0, 0, Config.FieldSize / 2 - Config.SpawnEdgeOffset)
+	local farthest = 0
+	local farthestIndex = 1
+	for index, point in patrolPoints do
+		local distance = Perception.FlatDistance(point, startPosition)
+		if distance > farthest then
+			farthest = distance
+			farthestIndex = index
+		end
 	end
-	spawning = true
+	return farthestIndex
+end
 
-	local ok, result = pcall(FarmerModel.Create)
-	if not ok then
-		spawning = false
-		warn(`[EnemyService] 農家さんを作れませんでした: {result}`)
-		return false
-	end
-	local model = result :: Model
+local function newContext(
+	definition: Types.Definition,
+	model: Model,
+	humanoid: Humanoid,
+	root: BasePart,
+	spawnPoint: Vector3
+): Types.Context
+	return {
+		Definition = definition,
+		Model = model,
+		Humanoid = humanoid,
+		Root = root,
+		SpawnPoint = spawnPoint,
+		PatrolPoints = patrolPoints,
+		PatrolIndex = 1,
+		BehaviorName = "",
+		SwitchCount = 0,
+		LastTickAt = os.clock(),
+		Target = nil,
+		AnyPlaying = false,
+		ChasePlayer = nil,
+		LastSeenPosition = nil,
+		LostSightSince = nil,
+		SearchEndAt = 0,
+		Move = Movement.NewState(),
+	}
+end
 
-	local old = farmer
-	farmer = nil
+-- 古い天敵が残っていたら片づける
+local function removeOld(slot: Slot)
+	local old = slot.Ctx
+	slot.Ctx = nil
 	if old then
-		old:Destroy()
+		Movement.Clear(old) -- 計算中の古い経路の結果を捨てさせる
+		old.Model:Destroy()
 	end
+end
 
-	model:PivotTo(CFrame.new(spawnPosition))
+-- 天敵を作って、置き場に入れる。失敗したら error を投げる(呼ぶ側が pcall で包む)。
+-- 人型の作成は待ちが入る
+local function buildEnemy(slot: Slot)
+	local definition = slot.Definition
+	local model = definition.Create()
+	removeOld(slot)
+
+	local point = patrolPoints[slot.SpawnIndex]
+	definition.PlaceAt(model, point) -- まず、Workspace に入れる前に置く(足元の高さを補正する)
 	model.Parent = getEnemiesFolder()
-	FarmerModel.ClaimServerOwnership(model) -- Workspace に入れたあとで、動きの計算をサーバーにする
-	farmer = model
-
-	local parts = getParts()
-	if parts then
-		enterPatrol(parts)
-		patrolIndex = spawnIndex % #patrolPoints + 1 -- 出現位置の「次」の地点から回る
+	definition.OnPlaced(model) -- Workspace に入れたあとで、動きの計算をサーバーにする、など
+	task.wait() -- 1フレーム待ってから、Workspace に入った状態の足元の高さで、もう一度補正する
+	if model.Parent == nil then
+		error("待っている間にモデルが消えました")
 	end
-	spawning = false
-	return parts ~= nil
+	definition.PlaceAt(model, point)
+
+	local humanoid, root = Perception.FindBody(model)
+	if not humanoid or not root then
+		model:Destroy()
+		error("体の部品(Humanoid / HumanoidRootPart)が足りません")
+	end
+	local ctx = newContext(definition, model, humanoid, root, point)
+	slot.Ctx = ctx
+	switchBehavior(ctx, definition.InitialBehavior)
+end
+
+-- 天敵を作る。成功したら true。作っている最中なら何もしない
+local function spawnEnemy(slot: Slot): boolean
+	if slot.Spawning then
+		return false
+	end
+	slot.Spawning = true
+	local ok, err = pcall(buildEnemy, slot)
+	slot.Spawning = false
+	if not ok then
+		WarnOnce.Warn(
+			`spawn:{slot.Definition.Name}:{tostring(err)}`,
+			`[EnemyService] {slot.Definition.Name} を作れませんでした: {err}`
+		)
+		return false
+	end
+	return true
+end
+
+-- ===== 判断のループ =====
+
+-- 天敵1体の、判断1回ぶん。体が使えなくなっていたら false。
+-- 順番: 捕獲の判定 → 見回す → 行動の Update → 行動の切り替え
+local function tickEnemy(slot: Slot, ctx: Types.Context): boolean
+	if not Perception.IsUsable(ctx) then
+		return false
+	end
+	local now = os.clock()
+	local dt = now - ctx.LastTickAt
+	ctx.LastTickAt = now
+
+	-- どの行動の最中でも、近すぎる相手は捕まえる(潜っていても、ごく近くなら捕まる)
+	if Perception.CheckCatch(ctx) then
+		Movement.Stop(ctx)
+		switchBehavior(ctx, ctx.Definition.InitialBehavior) -- 捕まえたら見回りに戻る
+		return true
+	end
+
+	Perception.Scan(ctx)
+	local behavior = ctx.Definition.Behaviors[ctx.BehaviorName]
+	if not behavior then
+		switchBehavior(ctx, ctx.Definition.InitialBehavior)
+		return true
+	end
+	local switchCountBefore = ctx.SwitchCount
+	local nextName = behavior.Update(ctx, dt) -- 経路を待つ間、止まることがある
+	-- 待っている間に、やり直しなどで別の天敵・別の行動に変わっていたら、切り替えない
+	if nextName ~= nil and slot.Ctx == ctx and ctx.SwitchCount == switchCountBefore and Perception.IsUsable(ctx) then
+		switchBehavior(ctx, nextName)
+	end
+	return true
+end
+
+-- 判断1回ぶん(全員)。使える天敵が1体もいなくなったら false(ループを終える)
+local function think(): boolean
+	local anyUsable = false
+	for _, slot in slots do
+		local ctx = slot.Ctx
+		if ctx then
+			local ok, usable = pcall(tickEnemy, slot, ctx)
+			if not ok then
+				WarnOnce.Warn(`think:{tostring(usable)}`, `[EnemyService] 判断中にエラー: {usable}`)
+				anyUsable = true -- エラーでも、次の判断で続ける
+			elseif usable == true then
+				anyUsable = true
+			end
+		end
+	end
+	return anyUsable
 end
 
 -- 動きの「ループ」を始める。同時に動くのは1つだけ(古いループは番号が合わなくなって終わる)。
@@ -388,11 +246,8 @@ local function startLoop()
 				reason = "新しいループに引き継いだ"
 				break
 			end
-			local thinkOk, alive = pcall(think)
-			if not thinkOk then
-				warn(`[EnemyService] 判断中にエラー: {alive}`)
-			elseif alive == false then
-				reason = "農家さんが壊れた・倒れた・いなくなった"
+			if not think() then
+				reason = "天敵が壊れた・倒れた・いなくなった"
 				break
 			end
 		end
@@ -403,26 +258,43 @@ local function startLoop()
 	end)
 end
 
--- 「もう一度」でやり直すとき。
--- 農家さんが壊れている・死んでいる・Root がないなら、作り直してループも始め直す。
--- 無事なら、位置を出現位置に戻して見回りに戻すだけ
-local function onRestart()
-	local parts = getParts()
-	if not parts then
-		if spawning then
-			return -- すでに作り直している最中
+-- ===== やり直し =====
+
+-- 置き場1つぶんのやり直し。
+-- 天敵が壊れている・死んでいるなら作り直す。無事なら、出現位置に戻して最初の行動に戻す。
+-- 作り直したら true
+local function restartSlot(slot: Slot): boolean
+	local ctx = slot.Ctx
+	if not ctx or not Perception.IsUsable(ctx) then
+		if slot.Spawning then
+			return false -- すでに作り直している最中
 		end
-		warn("[EnemyService] 農家さんが使えないので、作り直します")
-		if spawnFarmer() then
-			startLoop()
-		end
-		return
+		warn(`[EnemyService] {slot.Definition.Name} が使えないので、作り直します`)
+		return spawnEnemy(slot)
 	end
-	parts.Model:PivotTo(CFrame.new(spawnPosition))
-	enterPatrol(parts)
-	patrolIndex = spawnIndex % #patrolPoints + 1 -- 出現位置の「次」の地点から回る
-	stopMoving(parts)
-	if not loopRunning then
+	ctx.Definition.PlaceAt(ctx.Model, ctx.SpawnPoint) -- 横位置を戻し、足元の高さも補正し直す
+	switchBehavior(ctx, ctx.Definition.InitialBehavior)
+	Movement.Stop(ctx)
+	return false
+end
+
+-- 使える天敵が1体でもいるか
+local function hasUsableEnemy(): boolean
+	for _, slot in slots do
+		local ctx = slot.Ctx
+		if ctx and Perception.IsUsable(ctx) then
+			return true
+		end
+	end
+	return false
+end
+
+-- 「もう一度」でやり直すとき(RoundService から呼ばれる)
+local function onRestart()
+	for _, slot in slots do
+		restartSlot(slot)
+	end
+	if not loopRunning and hasUsableEnemy() then
 		startLoop() -- ループが止まっていたら動かし直す
 	end
 end
@@ -435,18 +307,34 @@ function EnemyService.Start()
 
 	patrolPoints = FieldService.GetPatrolPoints()
 	if #patrolPoints == 0 then
-		warn("[EnemyService] 見回り地点がないので、農家さんを出せません")
+		warn("[EnemyService] 見回り地点がないので、天敵を出せません")
 		return
 	end
-	chooseSpawn()
+
+	-- 種類ごとに置き場を作る。出現位置は、いちばん遠い地点から順にずらす
+	local firstIndex = findFarthestPatrolIndex()
+	for order, definition in definitions do
+		table.insert(slots, {
+			Definition = definition,
+			SpawnIndex = (firstIndex + order - 2) % #patrolPoints + 1,
+			Ctx = nil,
+			Spawning = false,
+		})
+	end
 
 	-- 最初に作れなくても、「もう一度」のときに作り直せるように、先に登録しておく
 	RoundService.OnRestart(onRestart)
 
-	if spawnFarmer() then
+	local anySpawned = false
+	for _, slot in slots do
+		if spawnEnemy(slot) then
+			anySpawned = true
+		end
+	end
+	if anySpawned then
 		startLoop()
 	else
-		warn("[EnemyService] 最初の農家さんを作れませんでした。「もう一度」で作り直します")
+		warn("[EnemyService] 最初の天敵を作れませんでした。「もう一度」で作り直します")
 	end
 end
 
