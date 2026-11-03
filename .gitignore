@@ -1,0 +1,12 @@
+# Roblox のプレイス(ゲーム本体)ファイル。コードはsrc/で管理するので除外
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Rojo が自動生成するファイル
+sourcemap.json
+
+# その他
+.DS_Store
+node_modules/

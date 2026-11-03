@@ -1,0 +1,33 @@
+{
+  "name": "rob-draft1",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Shared": {
+        "$path": "src/ReplicatedStorage/Shared"
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Server": {
+        "$path": "src/ServerScriptService"
+      }
+    },
+    "ServerStorage": {
+      "$className": "ServerStorage",
+      "Modules": {
+        "$path": "src/ServerStorage/Modules"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Client": {
+          "$path": "src/StarterPlayer/StarterPlayerScripts"
+        }
+      }
+    }
+  }
+}
