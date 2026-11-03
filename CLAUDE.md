@@ -14,12 +14,22 @@ default.project.json   Rojo(同期ツール)の設定。Studioとコードをつ
 src/
   ReplicatedStorage/Shared/       サーバーとクライアントの両方が使う部品(設定値など)
   ServerScriptService/            サーバー側のスクリプト(判定・保存・課金)
+    Services/                     機能ごとのまとまり(例:データ保存、ショップ)
   ServerStorage/Modules/          サーバー専用の部品
   StarterPlayer/StarterPlayerScripts/   クライアント側のスクリプト(画面・操作)
+    Controllers/                  画面ごとの操作のまとまり
+  StarterGui/                     画面(UI)に関するスクリプト
+assets/
+  images/           画像の元ファイル(アイコン、サムネ、UI)
+  audio/            音の元ファイル
+  CREDITS.md        素材の台帳(出どころと使用条件を必ず記録する)
 docs/
   game-concept.md   ゲームの企画書(まずここを埋める)
   specs/            機能ごとの仕様書(_template.md を複製して使う)
+  decisions/        決めたことの記録(なぜそうしたか)
+  playtest/         遊んでみた記録(誰が、どこで迷ったか、継続率など)
   marketing/        公開と宣伝の計画
+    video-scripts/  縦動画の台本
 .claude/agents/     役割ごとのClaude(scripter / reviewer)
 ```
 
