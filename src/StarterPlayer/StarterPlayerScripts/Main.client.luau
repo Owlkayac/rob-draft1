@@ -7,3 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config") :: ModuleScript)
 
 print(`[{Config.GameName}] クライアント起動`)
+
+local DiveController = require(script.Parent.Controllers.DiveController)
+
+DiveController.Start()

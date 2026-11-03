@@ -7,3 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.Shared.Config)
 
 print(`[{Config.GameName}] サーバー起動`)
+
+local CrayfishService = require(script.Parent.Services.CrayfishService)
+
+CrayfishService.Start()
