@@ -44,6 +44,8 @@ local TAIL_START_Z_RATIO = 0.6 -- しっぽの始まりの位置(u 倍。胴体�
 local FIN_WIDTH = 1.4 -- ひれの幅
 local FIN_THICKNESS = 0.1 -- ひれの厚さ
 local FIN_LENGTH_RATIO = 0.5 -- ひれの長さ(u 倍)
+local NOZZLE_SIZE = 0.2 -- 噴射口(見えない小さな Part)の一辺
+local NOZZLE_BEHIND = 0.3 -- 噴射口を、ひれの後ろの端から、さらに後ろへずらす距離
 
 local BELLY_WIDTH = 0.8 -- お腹の板の幅
 local BELLY_THICKNESS = 0.1 -- お腹の板の厚さ
@@ -204,6 +206,26 @@ local function makeSplashEmitter(): ParticleEmitter
 	return emitter
 end
 
+-- 噴射の粒子(ParticleEmitter)を作る。Enabled=false で作り、ジェット中だけ CrayfishService が true にする。(仕様書 013)
+-- 向きは Back(部品の +Z 側)。噴射口の Part は、ザリガニと同じ向きで作るので、+Z = ザリガニの後ろ。
+-- 粒子の画像(Texture)は設定しない(Roblox の既定のまま)
+local function makeJetEmitter(): ParticleEmitter
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "JetEmitter"
+	emitter.Enabled = false
+	emitter.Rate = Config.JetRate
+	emitter.Lifetime = NumberRange.new(Config.JetLifetimeMin, Config.JetLifetimeMax)
+	emitter.Speed = NumberRange.new(Config.JetSpeedMin, Config.JetSpeedMax)
+	emitter.Color = ColorSequence.new(Config.JetColor)
+	emitter.Size = NumberSequence.new(Config.JetSizeStart, Config.JetSizeEnd) -- だんだん小さく
+	emitter.Transparency = NumberSequence.new(Config.JetTransparencyStart, 1) -- だんだん透明に
+	emitter.Acceleration = Config.JetAcceleration
+	emitter.EmissionDirection = Enum.NormalId.Back
+	emitter.SpreadAngle = Config.JetSpreadAngle
+	emitter.LightEmission = Config.JetLightEmission
+	return emitter
+end
+
 -- 胴体とお腹の板
 local function buildBody(ctx: Context)
 	local u, h = ctx.U, ctx.H
@@ -230,15 +252,20 @@ local function buildBody(ctx: Context)
 	)
 end
 
--- しっぽ(節を後ろに並べる)と、尾の先のひれ
+-- しっぽ(節を後ろに並べる)と、尾の先のひれ。
+-- 全体を1つの Motor6D(名前 Tail)で胴体につなぐ(仕様書 013)。
+--   最初の節を Motor6D でつなぎ、ほかの節とひれは、最初の節に WeldConstraint で固定する(固まりで動く)。
+--   関節(回転の中心)は、しっぽの付け根 = 胴体の後ろの端(z = u × TAIL_START_Z_RATIO)。高さは、最初の節の中ほど。
+--   addMotor が C0・C1 を計算するので、Transform が単位のときの位置は、これまでの溶接のときと同じ。
 local function buildTail(ctx: Context)
 	local u, h = ctx.U, ctx.H
 	local lift = h * BODY_LIFT_RATIO
+	local first: Part? = nil
 	for i = 1, TAIL_COUNT do
 		local width = TAIL_FIRST_WIDTH - TAIL_WIDTH_STEP * (i - 1)
 		local height = h * (TAIL_HEIGHT_RATIO - TAIL_HEIGHT_STEP_RATIO * (i - 1))
 		local z = u * (TAIL_START_Z_RATIO + TAIL_SEGMENT_PITCH_RATIO * (i - 0.5))
-		addFixedPart(
+		local segment = addPart(
 			ctx,
 			`TailSegment{i}`,
 			"Block",
@@ -246,10 +273,15 @@ local function buildTail(ctx: Context)
 			CFrame.new(0, lift + height / 2, z),
 			Config.CrayfishColor
 		)
+		if first then
+			weldParts(first, segment)
+		else
+			first = segment
+		end
 	end
 	local finLength = u * FIN_LENGTH_RATIO
 	local finZ = u * (TAIL_START_Z_RATIO + TAIL_SEGMENT_PITCH_RATIO * TAIL_COUNT) + finLength / 2
-	addFixedPart(
+	local fin = addPart(
 		ctx,
 		"TailFin",
 		"Block",
@@ -257,6 +289,36 @@ local function buildTail(ctx: Context)
 		CFrame.new(0, lift + FIN_THICKNESS / 2 + 0.05, finZ),
 		Config.CrayfishColor
 	)
+	if first then
+		weldParts(first, fin)
+		local firstHeight = h * TAIL_HEIGHT_RATIO
+		addMotor(ctx, first, "Tail", Vector3.new(0, lift + firstHeight / 2, u * TAIL_START_Z_RATIO))
+	else
+		weldParts(ctx.Root, fin) -- ありえないが、節がなければ、ひれだけ固定する
+	end
+end
+
+-- 噴射口:尻尾の先の少し後ろにある、見えない小さな Part。中に噴射の粒子(JetEmitter)を入れる。
+-- 尻尾のひれは、ジェット中に回る(丸まる)ので、粒子をひれにつけると、下向きに出てしまう。
+-- そこで、回らない胴体(Body)に WeldConstraint でつける。ザリガニの向きに合わせて作るので、Back = ザリガニの後ろ。
+-- 透明で、当たり判定もない。潜るときの透明度の処理(max(元の値, DiveTransparency))でも、透明のまま。
+local function buildJetNozzle(ctx: Context)
+	local u, h = ctx.U, ctx.H
+	local lift = h * BODY_LIFT_RATIO
+	local tailHeight = h * TAIL_HEIGHT_RATIO
+	-- ひれの後ろの端 = しっぽの始まり + 節の並び + ひれの長さ。そこから少し後ろ
+	local z = u * (TAIL_START_Z_RATIO + TAIL_SEGMENT_PITCH_RATIO * TAIL_COUNT + FIN_LENGTH_RATIO) + NOZZLE_BEHIND
+	local nozzle = addPart(
+		ctx,
+		"JetNozzle",
+		"Block",
+		Vector3.new(NOZZLE_SIZE, NOZZLE_SIZE, NOZZLE_SIZE),
+		CFrame.new(0, lift + tailHeight / 2, z), -- 高さは、しっぽの高さ(最初の節の中ほど)
+		Config.CrayfishColor
+	)
+	nozzle.Transparency = 1
+	weldParts(ctx.Body or ctx.Root, nozzle) -- 胴体(なければ HumanoidRootPart)に固定
+	makeJetEmitter().Parent = nozzle
 end
 
 -- 大きなはさみ(腕+球+先の小さな箱)。side は左右(-1 か 1)
@@ -407,6 +469,7 @@ function CrayfishModel.Attach(character: Model): boolean
 	}
 	buildBody(ctx)
 	buildTail(ctx)
+	buildJetNozzle(ctx)
 	buildBothSides(ctx)
 	folder.Parent = character -- 全部できてから入れる
 	return true

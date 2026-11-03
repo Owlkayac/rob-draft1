@@ -5,6 +5,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -30,6 +31,10 @@ type PlayerState = {
 	LastRequestAt: number, -- 最後に要求を受け付けた時刻(os.clock)
 	Alive: boolean, -- 生きているか(仕様書002・003であとで使う)
 	OriginalTransparency: { [BasePart]: number }, -- 潜る前の透明度(浮上で戻す)
+	Jetting: boolean, -- ジェットを噴射中か(仕様書 013)
+	JetToken: number, -- 噴射の古いタイマーを無効にするための番号
+	JetReadyAt: number, -- この時刻(os.clock)から、ジェットを使える
+	LastJetRequestAt: number, -- 最後にジェットを発動した時刻(os.clock)
 }
 
 local CrayfishService = {}
@@ -46,6 +51,10 @@ local function newState(): PlayerState
 		LastRequestAt = -math.huge,
 		Alive = true,
 		OriginalTransparency = {},
+		Jetting = false,
+		JetToken = 0,
+		JetReadyAt = -math.huge,
+		LastJetRequestAt = -math.huge,
 	}
 end
 
@@ -192,6 +201,129 @@ local function resetDiveState(player: Player)
 	stopSplash(state, player.Character) -- 水しぶきも止める
 end
 
+-- ===== ジェット(仕様書 013) =====
+
+-- キャラクターの噴射の粒子(CrayfishModel でつけた JetEmitter)を探す。なければ nil
+local function findJetEmitter(character: Model?): ParticleEmitter?
+	if not character then
+		return nil
+	end
+	local visual = character:FindFirstChild(VISUAL_FOLDER_NAME)
+	if not visual then
+		return nil
+	end
+	local found = visual:FindFirstChild("JetEmitter", true)
+	if found and found:IsA("ParticleEmitter") then
+		return found
+	end
+	return nil
+end
+
+-- 噴射の粒子を出す・止める。粒子がなくても(消えていても)エラーにしない
+local function setJetEmitter(character: Model?, enabled: boolean)
+	local emitter = findJetEmitter(character)
+	if emitter then
+		emitter.Enabled = enabled
+	end
+end
+
+-- 噴射の終わらせ方
+--   "Cooldown": 噴射の時間切れ。ため直しを始める
+--   "Reset":    死亡・生まれ直し。ため直しもなくして、すぐ使える状態に戻す
+--   "Keep":     つかまった・クリア。噴射だけ止める(ため直しは、始めない・なくさない。生まれ直しでリセットされる)
+type JetEndMode = "Cooldown" | "Reset" | "Keep"
+
+-- 噴射を終わらせる。時間切れ・死亡・つかまった・クリア・生まれ直しのすべてで、この関数を使う。
+-- 噴射中でなくても、安全に呼べる(その場合、ため直しは始めない)
+local function endJet(player: Player, mode: JetEndMode)
+	local state = states[player]
+	if not state then
+		return
+	end
+	local wasJetting = state.Jetting
+	state.Jetting = false
+	state.JetToken += 1 -- 残っているタイマーを無効にする
+
+	local character = player.Character
+	if wasJetting then
+		local humanoid = getHumanoid(player)
+		-- 潜っているときは変えない(潜る処理が WalkSpeed = 0 を管理する)
+		if humanoid and not state.Diving then
+			humanoid.WalkSpeed = Config.CrayfishWalkSpeed
+		end
+	end
+	if character then
+		character:SetAttribute("Jetting", false)
+	end
+	setJetEmitter(character, false)
+
+	if mode == "Cooldown" and wasJetting then
+		state.JetReadyAt = os.clock() + Config.JetCooldownSeconds
+		if character then
+			character:SetAttribute("JetReadyTime", Workspace:GetServerTimeNow() + Config.JetCooldownSeconds)
+		end
+	elseif mode == "Reset" then
+		state.JetReadyAt = -math.huge
+		if character then
+			character:SetAttribute("JetReadyTime", 0)
+		end
+	end
+end
+
+-- 噴射を始める(呼ぶ前に、使える条件を確認しておくこと)
+local function startJet(player: Player, state: PlayerState, character: Model, humanoid: Humanoid)
+	state.Jetting = true
+	state.JetToken += 1
+	local token = state.JetToken
+
+	humanoid.WalkSpeed = Config.CrayfishWalkSpeed * Config.JetSpeedMultiplier
+	character:SetAttribute("Jetting", true)
+	setJetEmitter(character, true)
+
+	-- 噴射の時間がたったら終わらせる(同じ噴射のときだけ。番号が違えば、古いタイマーなので何もしない)
+	task.delay(Config.JetSeconds, function()
+		local current = states[player]
+		if current and current.Jetting and current.JetToken == token then
+			endJet(player, "Cooldown")
+		end
+	end)
+end
+
+-- ジェットの状態を、何も起きていない状態に戻す(スポーン時・死亡時)
+local function resetJetState(player: Player)
+	endJet(player, "Reset")
+end
+
+-- ジェットのお願いを確認して処理する。値は受け取らない(余分な引数があれば捨てる)。
+-- 検証に通らないお願いは、黙って捨てる
+local function onJetRequest(player: Player, ...: any)
+	local state = states[player] -- (a) 状態があるか
+	if not state then
+		return
+	end
+	if select("#", ...) ~= 0 then -- (b) 余分な引数
+		return
+	end
+	local now = os.clock()
+	if now - state.LastJetRequestAt < Config.JetRequestMinInterval then -- (c) 連打
+		return
+	end
+	if not state.Alive or state.Diving or state.Jetting then -- (d) 生存・潜っていない・噴射中でない
+		return
+	end
+	if now < state.JetReadyAt then -- (e) ため直し
+		return
+	end
+	local character = player.Character
+	local humanoid = getHumanoid(player)
+	if not character or not humanoid or humanoid.Health <= 0 then
+		return
+	end
+	-- 受け付けて発動するときだけ時刻を覚える(捨てた要求で更新すると、連打でため直しが終わっても発動できなくなる)
+	state.LastJetRequestAt = now
+	startJet(player, state, character, humanoid)
+end
+
 -- クライアントからのお願いを確認して処理する
 local function onDiveRequest(player: Player, wantDive: unknown)
 	local state = states[player] -- (a) 状態があるか
@@ -218,7 +350,7 @@ local function onDiveRequest(player: Player, wantDive: unknown)
 	end
 	state.LastRequestAt = now
 
-	if state.Diving or now < state.CooldownUntil then
+	if state.Diving or state.Jetting or now < state.CooldownUntil then -- ジェット中は潜れない(仕様書 013)
 		return
 	end
 	local character = player.Character
@@ -245,11 +377,16 @@ local function applyLook(player: Player, character: Model)
 	if state and state.Diving then
 		applyDiveLook(state, character)
 	end
+	-- 噴射中に作り直されたら、新しい粒子も出す
+	if state and state.Jetting then
+		setJetEmitter(character, true)
+	end
 end
 
 -- キャラクターが生成されたときの準備
 local function setupCharacter(player: Player, character: Model)
 	resetDiveState(player)
+	resetJetState(player)
 
 	-- 新しく生まれ直したら、生きている状態に戻す(つかまった後のやり直しに備える)
 	local state = states[player]
@@ -274,6 +411,7 @@ local function setupCharacter(player: Player, character: Model)
 
 	humanoid.Died:Connect(function()
 		resetDiveState(player)
+		resetJetState(player)
 	end)
 end
 
@@ -303,6 +441,11 @@ function CrayfishService.Start()
 	remote.Parent = ReplicatedStorage
 	remote.OnServerEvent:Connect(onDiveRequest)
 
+	local jetRemote = Instance.new("RemoteEvent")
+	jetRemote.Name = Config.JetRemoteName
+	jetRemote.Parent = ReplicatedStorage
+	jetRemote.OnServerEvent:Connect(onJetRequest)
+
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(function(player: Player)
 		states[player] = nil
@@ -327,6 +470,7 @@ function CrayfishService.SetAlive(player: Player, alive: boolean)
 	state.Alive = alive
 	if not alive then
 		surface(player)
+		endJet(player, "Keep") -- 噴射中なら止める(ため直しは始めない。生まれ直しでリセットされる)
 	end
 end
 

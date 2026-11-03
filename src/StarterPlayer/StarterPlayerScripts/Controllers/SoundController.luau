@@ -16,12 +16,13 @@ local SoundUtil = require(Shared:WaitForChild("SoundUtil") :: ModuleScript)
 local SoundController = {}
 
 local HIDDEN_ATTRIBUTE = "Hidden" -- 潜っているとき、サーバーがキャラクターにつける目印
+local JETTING_ATTRIBUTE = "Jetting" -- ジェット噴射中、サーバーがキャラクターにつける目印(仕様書 013)
 local STATE_PLAYING = "Playing"
 local STATE_CAUGHT = "Caught"
 local STATE_CLEARED = "Cleared"
 
 -- 作る音の種類(Config.SoundIds のキーと同じ名前)
-local SOUND_NAMES = { "Ambient", "Splash", "Eat", "Caught", "Clear" }
+local SOUND_NAMES = { "Ambient", "Splash", "Jet", "Eat", "Caught", "Clear" }
 
 local sounds: { [string]: Sound } = {} -- 種類 → Sound(IDが有効な種類だけ入る)
 local started = false
@@ -29,6 +30,8 @@ local lastState: string? = nil -- 最後に受け取った RoundState の状態(
 local ambientDucked = false -- 環境音を小さくしている最中か
 local ambientTween: Tween? = nil
 local hiddenConnection: RBXScriptConnection? = nil -- 今のキャラクターの Hidden を見るつなぎ
+local jettingConnection: RBXScriptConnection? = nil -- 今のキャラクターの Jetting を見るつなぎ
+local lastJetting = false -- 前に見た Jetting の値(false から true に変わったときだけ Jet を鳴らすため)
 local lastHidden = false -- 前に見た Hidden の値(実際に変わったときだけ Splash を鳴らすため。無い値は false 扱い)
 
 -- 生きている Sound を返す。作っていない・消えた(Parent がない)ときは nil
@@ -128,9 +131,35 @@ local function disconnectHidden()
 	end
 end
 
+-- 古い Jetting の見張りを切る
+local function disconnectJetting()
+	local connection = jettingConnection
+	jettingConnection = nil
+	if connection then
+		connection:Disconnect()
+	end
+end
+
+-- キャラクターができたら、Jetting の変化(噴射の始まり)を見張る。最初の値は、鳴らさずに覚えるだけ
+local function watchJetting(character: Model)
+	disconnectJetting()
+	lastJetting = character:GetAttribute(JETTING_ATTRIBUTE) == true
+	jettingConnection = character:GetAttributeChangedSignal(JETTING_ATTRIBUTE):Connect(function()
+		local value = character:GetAttribute(JETTING_ATTRIBUTE) == true
+		if value == lastJetting then
+			return -- 実際には変わっていない
+		end
+		lastJetting = value
+		if value then
+			playOnce("Jet") -- false から true になったときだけ、1回鳴らす
+		end
+	end)
+end
+
 -- キャラクターができたら、Hidden の変化(潜る・浮上)を見張る。生まれ直すたびに、つなぎ直す。
 -- 値が実際に変わったときだけ Splash を鳴らす。最初の値は、鳴らさずに覚えるだけ
 local function watchCharacter(character: Model)
+	watchJetting(character)
 	disconnectHidden()
 	lastHidden = character:GetAttribute(HIDDEN_ATTRIBUTE) == true -- 生まれ直したので、覚え直す(鳴らさない)
 	hiddenConnection = character:GetAttributeChangedSignal(HIDDEN_ATTRIBUTE):Connect(function()

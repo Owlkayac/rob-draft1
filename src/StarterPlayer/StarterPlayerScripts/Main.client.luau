@@ -11,6 +11,7 @@ print(`[{Config.GameName}] クライアント起動`)
 -- 起動する部品の名前(Controllers フォルダの中の ModuleScript)。この順番で起動を始める
 local CONTROLLER_NAMES = {
 	"DiveController",
+	"JetController",
 	"GuiController",
 	"LightingController",
 	"RiceSwayController",

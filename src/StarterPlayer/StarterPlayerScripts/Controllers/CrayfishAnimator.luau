@@ -9,6 +9,8 @@
 --   足:   Y軸まわりに回す → 足先が前後にふれる
 --   はさみ: X軸まわりに回す → 先が上下にゆれる(プラスで上)
 --   ひげ:   X軸まわり(下向きにたなびく)と、Y軸まわり(ふるえ)
+--   しっぽ(Tail): X軸まわり。プラスで、しっぽの先が下(お腹の側)へ丸まる(仕様書 013)。
+--     (しっぽは後ろ = +Z へ伸びている。+Z の点を X軸でプラスに回すと、Y が -sin(角度) になり、下へ向かう)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -20,6 +22,8 @@ local CrayfishAnimator = {}
 
 local VISUAL_FOLDER_NAME = "CrayfishVisual" -- CrayfishModel と同じ名前
 local HIDDEN_ATTRIBUTE = "Hidden" -- 潜っているとき、サーバーがキャラクターにつける目印
+local JETTING_ATTRIBUTE = "Jetting" -- ジェット噴射中、サーバーがキャラクターにつける目印
+local TAIL_MOTOR_NAME = "Tail" -- しっぽの Motor6D の名前(CrayfishModel と同じ)
 local TWO_PI = 2 * math.pi
 local MAX_DT = 0.1 -- 1フレームの時間の上限(重いときに、急に飛ばないように)
 local MIN_POSITIVE = 0.001 -- 割り算の下の数がこれより小さくならないようにする下限(Config が 0 でも、0 で割らない)
@@ -40,6 +44,9 @@ type AnimEntry = {
 	Legs: { JointEntry },
 	Claws: { JointEntry },
 	Antennae: { JointEntry },
+	Tail: Motor6D?, -- しっぽの関節(古い見た目で、なければ nil)
+	WasJetting: boolean, -- 前のフレームで噴射中だったか(始まった瞬間を見つけるため)
+	JetStartedAt: number, -- 噴射が始まった時刻(os.clock)
 	Dirty: boolean, -- 関節の一覧を作り直す必要があるか
 	Phase: number, -- 足の動きの位相(ラジアン)。歩いた距離に比例して進む
 	Walk: number, -- 歩きの度合い(0 = 止まっている、1 = 歩いている。なめらかに変わる)
@@ -58,6 +65,10 @@ end
 
 -- 関節の名前を見て、種類ごとの一覧に入れる。知らない名前は無視する
 local function classifyMotor(entry: AnimEntry, motor: Motor6D)
+	if motor.Name == TAIL_MOTOR_NAME then
+		entry.Tail = motor
+		return
+	end
 	local legSide, legIndex = string.match(motor.Name, "^Leg([LR])(%d+)$")
 	if legSide and legIndex then
 		table.insert(entry.Legs, { Motor = motor, Side = sideFromLetter(legSide), Index = tonumber(legIndex) or 1 })
@@ -79,6 +90,7 @@ local function rebuildJoints(entry: AnimEntry)
 	entry.Legs = {}
 	entry.Claws = {}
 	entry.Antennae = {}
+	entry.Tail = nil
 	for _, part in entry.Visual:GetChildren() do
 		if part:IsA("BasePart") then
 			for _, child in part:GetChildren() do
@@ -121,6 +133,9 @@ local function registerVisual(instance: Instance)
 		Legs = {},
 		Claws = {},
 		Antennae = {},
+		Tail = nil,
+		WasJetting = false,
+		JetStartedAt = -math.huge,
 		Dirty = true,
 		Phase = 0,
 		Walk = 0,
@@ -233,10 +248,58 @@ local function animateAntennae(entry: AnimEntry, t: number)
 	end
 end
 
+-- なめらかな 0→1(始めと終わりがゆるやか)
+local function smoothStep(x: number): number
+	local c = math.clamp(x, 0, 1)
+	return c * c * (3 - 2 * c)
+end
+
+-- 噴射が始まってから elapsed 秒のときの、しっぽの丸め具合(0〜1)。
+-- 素早く丸める → 保つ → ゆっくり戻す
+local function tailCurlAmount(elapsed: number): number
+	local curlIn = math.max(Config.CrayfishTailCurlInSeconds, MIN_POSITIVE)
+	local release = math.max(Config.CrayfishTailReleaseSeconds, MIN_POSITIVE)
+	local holdEnd = curlIn + Config.CrayfishTailHoldSeconds
+	if elapsed < 0 then
+		return 0
+	elseif elapsed < curlIn then
+		return smoothStep(elapsed / curlIn)
+	elseif elapsed < holdEnd then
+		return 1
+	elseif elapsed < holdEnd + release then
+		return 1 - smoothStep((elapsed - holdEnd) / release)
+	end
+	return 0
+end
+
+-- しっぽを動かす。噴射が始まった瞬間から時間を数える。しっぽの関節がなければ、何もしない
+local function animateTail(entry: AnimEntry, t: number)
+	local jetting = entry.Character:GetAttribute(JETTING_ATTRIBUTE) == true
+	if jetting and not entry.WasJetting then
+		entry.JetStartedAt = t
+	end
+	entry.WasJetting = jetting
+	local tail = entry.Tail
+	if tail == nil or tail.Parent == nil then
+		return
+	end
+	local angle = math.rad(Config.CrayfishTailCurlDeg) * tailCurlAmount(t - entry.JetStartedAt)
+	tail.Transform = CFrame.Angles(angle, 0, 0) -- X軸まわりのプラス = しっぽの先が下へ
+end
+
+-- しっぽを元の姿勢(まっすぐ)に戻す。潜るとき、丸めたまま止まらないようにする
+local function resetTail(entry: AnimEntry)
+	local tail = entry.Tail
+	if tail ~= nil and tail.Parent ~= nil then
+		tail.Transform = CFrame.new()
+	end
+end
+
 -- キャラクター1体を1フレーム分動かす。壊れた状態なら、何もしない
 local function updateEntry(entry: AnimEntry, t: number, dt: number)
 	if entry.Character:GetAttribute(HIDDEN_ATTRIBUTE) == true then
-		return -- 潜っているときは、姿勢を保つ(更新しない)
+		resetTail(entry) -- 潜っているときは、足などの姿勢は保つが、しっぽはまっすぐに戻す
+		return
 	end
 	local root = getRoot(entry)
 	if not root then
@@ -249,6 +312,7 @@ local function updateEntry(entry: AnimEntry, t: number, dt: number)
 	animateLegs(entry)
 	animateClaws(entry, t)
 	animateAntennae(entry, t)
+	animateTail(entry, t)
 end
 
 -- 毎フレーム呼ばれる

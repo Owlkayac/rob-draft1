@@ -13,6 +13,37 @@ local Config = {
 
 	DiveRemoteName = "DiveRequest", -- 潜る/やめるのお願いを送る RemoteEvent の名前
 	DiveTransparency = 0.6, -- 潜っている間の透明度(0=見える、1=完全に透明)
+	-- 尻尾のジェット(仕様書 013。調整のしかたは docs/design/tail-jet.md)。数字は仮の初期値で、遊びながら調整する
+	JetRemoteName = "JetRequest", -- ジェットのお願いを送る RemoteEvent の名前
+	JetSeconds = 0.8, -- 噴射の長さ(秒)
+	JetSpeedMultiplier = 2.4, -- 噴射中の速さの倍率(CrayfishWalkSpeed にかける)
+	JetCooldownSeconds = 8, -- 噴射が終わってから、次に使えるまでの時間(秒)
+	JetRequestMinInterval = 0.3, -- ジェットの要求の受け付け間隔の最小値(秒)。連打対策
+	JetWaitSeconds = 10, -- JetController が RemoteEvent を待つ最大の時間(秒)
+	JetGuiUpdateSeconds = 0.1, -- 画面の下の表示を更新する間隔(秒)。0 にしない
+	JetFovAdd = 12, -- 噴射中に広げる視野(FieldOfView)の角度(度)
+	JetFovInSeconds = 0.12, -- 視野を広げる時間(秒)。0 でもよい(Tween が即座に終わる)
+	JetFovOutSeconds = 0.4, -- 視野を戻す時間(秒)
+	-- 尻尾の動き(クライアントの CrayfishAnimator が動かす)
+	-- 注意: In + Hold + Release の3つの合計は、JetSeconds 以下にする(噴射が終わるまでに、尻尾の動きも終わるように)
+	CrayfishTailCurlDeg = 45, -- 尻尾を体の下に丸める角度(度)。大きいと、先が床の下に入る
+	CrayfishTailCurlInSeconds = 0.1, -- 丸めるのにかける時間(秒)。0 にしない(0 で割るため)
+	CrayfishTailHoldSeconds = 0.3, -- 丸めたまま保つ時間(秒)
+	CrayfishTailReleaseSeconds = 0.35, -- ゆっくり戻す時間(秒)。0 にしない(0 で割るため)
+	-- 噴射の粒子(尻尾の先から後ろへ。噴射中だけ。控えめ)
+	JetRate = 60, -- 1秒に出す数
+	JetLifetimeMin = 0.25, -- 寿命の最小(秒)
+	JetLifetimeMax = 0.45, -- 寿命の最大(秒)
+	JetSpeedMin = 8, -- 飛び出す速さの最小
+	JetSpeedMax = 14, -- 飛び出す速さの最大
+	JetSizeStart = 0.6, -- 出たときの大きさ(だんだん小さくなる)
+	JetSizeEnd = 0.1, -- 消える直前の大きさ
+	JetColor = Color3.fromRGB(180, 225, 255), -- 色(青白い)
+	JetTransparencyStart = 0.2, -- 出たときの透明度(消える直前は 1)
+	JetAcceleration = Vector3.new(0, 0, 0), -- 加速(世界の向き。0 で、まっすぐ後ろへ)
+	JetSpreadAngle = Vector2.new(20, 20), -- 広がる角度(度)
+	JetLightEmission = 0.4, -- 光り具合(少し明るく)
+
 	-- ザリガニの見た目(仕様書 005)。細かい寸法は CrayfishModel の中にある
 	CrayfishColor = Color3.fromRGB(200, 40, 30), -- ザリガニの体の色(赤)
 	CrayfishBellyColor = Color3.fromRGB(240, 110, 60), -- お腹・足・ひげの色(明るいオレンジ)
@@ -294,6 +325,7 @@ local Config = {
 		Eat = "", -- 餌を食べたとき(仕様書 012 でつなぐ)
 		Caught = "", -- つかまったとき
 		Clear = "", -- クリアしたとき
+		Jet = "", -- ジェットを噴射したとき(仕様書 013)
 	} :: { [string]: string },
 	-- 音量(0〜1)。種類ごと。ここにない種類は 0.5
 	SoundVolumes = {
@@ -303,6 +335,7 @@ local Config = {
 		Eat = 0.5,
 		Caught = 0.7,
 		Clear = 0.7,
+		Jet = 0.5,
 	} :: { [string]: number },
 	SoundHarvesterRollOffMaxDistance = 120, -- 稲刈り機の音が届く距離(これより遠いと聞こえない)
 	SoundHarvesterRollOffMinDistance = 15, -- この距離までは、音量が下がらない
